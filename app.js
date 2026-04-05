@@ -15,6 +15,38 @@ const staticImages = Array.isArray(window.BOOK_GALLERY_STATIC_IMAGES)
   ? window.BOOK_GALLERY_STATIC_IMAGES
   : [];
 
+/**
+ * Static card thumbs use Netlify Image CDN on deployed hosts: smaller dimensions plus AVIF/WebP
+ * via content negotiation. Full-resolution `path` is still used in the lightbox. Local file or
+ * localhost dev keeps raw `images/…` URLs (use `netlify dev` to exercise CDN locally).
+ * @see https://docs.netlify.com/image-cdn/overview/
+ */
+function shouldUseNetlifyImageCdn() {
+  if (typeof location === "undefined") return false;
+  if (location.protocol === "file:") return false;
+  const h = location.hostname;
+  return h !== "localhost" && h !== "127.0.0.1";
+}
+
+function absoluteSitePath(assetPath) {
+  return assetPath.startsWith("/") ? assetPath : `/${assetPath}`;
+}
+
+/** @returns {{ src: string, srcset?: string, sizes?: string }} */
+function thumbnailSourcesForStaticPath(assetPath) {
+  if (!shouldUseNetlifyImageCdn()) {
+    return { src: assetPath };
+  }
+  const abs = absoluteSitePath(assetPath);
+  const enc = encodeURIComponent(abs);
+  const base = `/.netlify/images?url=${enc}&q=78`;
+  return {
+    src: `${base}&w=720`,
+    srcset: `${base}&w=400 400w, ${base}&w=720 720w, ${base}&w=1080 1080w`,
+    sizes: "(max-width: 540px) 100vw, (max-width: 900px) 45vw, 320px",
+  };
+}
+
 const gallery = document.getElementById("gallery");
 const emptyState = document.getElementById("empty-state");
 const toolbar = document.getElementById("toolbar");
@@ -1245,10 +1277,16 @@ function renderStaticCard(path, displayIndex) {
 
   const img = document.createElement("img");
   img.className = "card-thumb";
-  img.src = path;
+  const thumb = thumbnailSourcesForStaticPath(path);
+  img.src = thumb.src;
+  if (thumb.srcset) {
+    img.srcset = thumb.srcset;
+    img.sizes = thumb.sizes;
+  }
   const cap = getStaticCaption(path);
   img.alt = cap.trim() ? cap.trim() : "Book photo";
   img.loading = "lazy";
+  img.decoding = "async";
 
   thumbWrap.appendChild(img);
 
