@@ -362,8 +362,8 @@ function updateSyncHint() {
       "Could not load the shared library (check Supabase URL, anon key, and SQL). Edits stay on this device until it works.";
     el.classList.add("sync-hint-warn");
   } else {
-    el.textContent =
-      "Notes, categories, and cropped photos sync online so anyone with this site sees the same library.";
+    el.textContent = "";
+    el.hidden = true;
     el.classList.remove("sync-hint-warn");
   }
 }
