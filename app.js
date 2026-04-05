@@ -1593,4 +1593,21 @@ document.getElementById("restore-hidden-item")?.addEventListener("click", () => 
   refresh().catch(console.error);
 });
 
-refresh().catch(console.error);
+function showGalleryInitError(err) {
+  console.error("book-gallery: gallery init failed", err);
+  const msg = document.getElementById("empty-state");
+  if (!msg) return;
+  const p = msg.querySelector("p");
+  if (p) {
+    p.textContent =
+      "The gallery could not finish loading (often a browser storage issue or blocked script). Try a hard refresh. If it keeps happening, open the developer console (F12) and check for errors.";
+  }
+  msg.classList.remove("hidden");
+  toolbar?.classList.add("hidden");
+  const allHiddenEl = document.getElementById("all-hidden-state");
+  allHiddenEl?.classList.add("hidden");
+  const filterEmptyEl = document.getElementById("filter-empty");
+  filterEmptyEl?.classList.add("hidden");
+}
+
+refresh().catch(showGalleryInitError);
