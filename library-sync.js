@@ -1,10 +1,11 @@
 /**
- * Cloud sync for file-based cards (paths like images/…).
- * Requires supabase-config.js, Supabase UMD, and a `library_items` table (see supabase-schema.sql).
+ * Cloud sync: manifest photos (`library_items`) + cropped uploads (`library_uploads` + Storage).
+ * Requires supabase-config.js, Supabase UMD, and SQL in supabase-schema.sql.
  */
 const LibrarySync = (() => {
   let client = null;
   let channel = null;
+  const UPLOAD_BUCKET = "library-uploads";
 
   function getClient() {
     if (client) return client;
@@ -26,12 +27,25 @@ const LibrarySync = (() => {
       return !!getClient();
     },
 
+    uploadBucket: UPLOAD_BUCKET,
+
     async pull() {
       const sb = getClient();
       if (!sb) return [];
       const { data, error } = await sb
         .from("library_items")
         .select("image_path,category,notes");
+      if (error) throw error;
+      return data || [];
+    },
+
+    async pullUploads() {
+      const sb = getClient();
+      if (!sb) return [];
+      const { data, error } = await sb
+        .from("library_uploads")
+        .select("id,caption,category,storage_path,updated_at")
+        .order("updated_at", { ascending: false });
       if (error) throw error;
       return data || [];
     },
@@ -61,6 +75,51 @@ const LibrarySync = (() => {
       if (error) console.error("LibrarySync.remove", error);
     },
 
+    getPublicUrlForUpload(storagePath) {
+      const sb = getClient();
+      if (!sb) return "";
+      const { data } = sb.storage.from(UPLOAD_BUCKET).getPublicUrl(storagePath);
+      return data?.publicUrl ?? "";
+    },
+
+    async uploadImageBlob(storagePath, blob, contentType = "image/jpeg") {
+      const sb = getClient();
+      if (!sb) return;
+      const { error } = await sb.storage.from(UPLOAD_BUCKET).upload(storagePath, blob, {
+        contentType,
+        upsert: true,
+      });
+      if (error) console.error("LibrarySync.uploadImageBlob", error);
+    },
+
+    async upsertUploadRecord(record) {
+      const sb = getClient();
+      if (!sb) return;
+      const { error } = await sb.from("library_uploads").upsert(
+        {
+          id: record.id,
+          caption: record.caption ?? "",
+          category: record.category ?? "",
+          storage_path: record.storage_path,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+      if (error) console.error("LibrarySync.upsertUploadRecord", error);
+    },
+
+    async deleteUpload(remoteId, storagePath) {
+      const sb = getClient();
+      if (!sb) return;
+      const { error: delErr } = await sb
+        .from("library_uploads")
+        .delete()
+        .eq("id", remoteId);
+      if (delErr) console.error("LibrarySync.deleteUpload row", delErr);
+      const { error: stErr } = await sb.storage.from(UPLOAD_BUCKET).remove([storagePath]);
+      if (stErr) console.error("LibrarySync.deleteUpload storage", stErr);
+    },
+
     subscribe(onChange) {
       const sb = getClient();
       if (!sb || typeof onChange !== "function") return;
@@ -69,10 +128,15 @@ const LibrarySync = (() => {
         channel = null;
       }
       channel = sb
-        .channel("library_items_changes")
+        .channel("library_all_changes")
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "library_items" },
+          () => onChange()
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "library_uploads" },
           () => onChange()
         )
         .subscribe();

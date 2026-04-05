@@ -196,8 +196,20 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
       return;
     }
     try {
-      const newId = await addPhotoFromBlob(blob, "");
+      const useCloud =
+        typeof crypto !== "undefined" &&
+        typeof crypto.randomUUID === "function" &&
+        window.LibrarySync?.isConfigured?.();
+      const remoteId = useCloud ? crypto.randomUUID() : null;
+      const newId = await addPhotoFromBlob(
+        blob,
+        "",
+        remoteId ? { remoteId } : {}
+      );
       await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
+      if (remoteId) {
+        syncNewLocalUploadToCloud(newId, remoteId).catch(console.error);
+      }
     } catch (idbErr) {
       console.error(idbErr);
       alert(
@@ -314,7 +326,7 @@ function updateSyncHint() {
     el.classList.add("sync-hint-warn");
   } else {
     el.textContent =
-      "Notes and categories for book photos sync online; other visitors see updates shortly.";
+      "Notes, categories, and cropped photos sync online so anyone with this site sees the same library.";
     el.classList.remove("sync-hint-warn");
   }
 }
@@ -372,8 +384,16 @@ function allCategoryNamesFromAssignments() {
 function syncCategoryDatalist() {
   const dl = document.getElementById(CATEGORY_DATALIST_ID);
   if (!dl) return;
+  const names = new Set(allCategoryNamesFromAssignments());
+  for (const it of lastItems) {
+    const c = categoryValueForItem(it);
+    if (c) names.add(c);
+  }
+  const sorted = [...names].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
   dl.replaceChildren();
-  for (const name of allCategoryNamesFromAssignments()) {
+  for (const name of sorted) {
     const opt = document.createElement("option");
     opt.value = name;
     dl.appendChild(opt);
@@ -691,7 +711,34 @@ function updateCaption(store, id, caption) {
       }
       row.caption = caption;
       const putReq = store.put(row);
-      putReq.onsuccess = () => resolve();
+      putReq.onsuccess = () => {
+        syncIdbUploadToCloudIfNeeded(id).catch(console.error);
+        resolve();
+      };
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+function updateIdbUploadFields(store, id, fields, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const row = getReq.result;
+      if (!row) {
+        reject(new Error("Not found"));
+        return;
+      }
+      if ("caption" in fields) row.caption = fields.caption;
+      if ("category" in fields) row.category = fields.category;
+      const putReq = store.put(row);
+      putReq.onsuccess = () => {
+        if (!opts.skipRemote) {
+          syncIdbUploadToCloudIfNeeded(id).catch(console.error);
+        }
+        resolve();
+      };
       putReq.onerror = () => reject(putReq.error);
     };
     getReq.onerror = () => reject(getReq.error);
@@ -709,15 +756,17 @@ function deletePhoto(store, id) {
 /**
  * @param {Blob} blob
  * @param {string} [caption]
+ * @param {Record<string, unknown>} [extra] e.g. `{ remoteId, category }` for cloud sync
  * @returns {Promise<number>} new row id
  */
-function addPhotoFromBlob(blob, caption = "") {
+function addPhotoFromBlob(blob, caption = "", extra = {}) {
+  const row = { blob, caption: caption ?? "", ...extra };
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, "readwrite");
         const st = tx.objectStore(STORE);
-        const req = st.add({ blob, caption });
+        const req = st.add(row);
         let newId;
         req.onsuccess = () => {
           newId = req.result;
@@ -728,6 +777,96 @@ function addPhotoFromBlob(blob, caption = "") {
         tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
       })
   );
+}
+
+async function syncNewLocalUploadToCloud(localId, remoteId) {
+  if (!window.LibrarySync?.isConfigured?.() || !remoteId) return;
+  const row = await withStore("readonly", (s) => getPhotoById(s, localId));
+  if (!row?.blob) return;
+  const path = `${remoteId}.jpg`;
+  await window.LibrarySync.uploadImageBlob(path, row.blob);
+  await window.LibrarySync.upsertUploadRecord({
+    id: remoteId,
+    caption: row.caption ?? "",
+    category: typeof row.category === "string" ? row.category : "",
+    storage_path: path,
+  });
+}
+
+async function syncIdbUploadToCloudIfNeeded(localId) {
+  if (!window.LibrarySync?.isConfigured?.()) return;
+  const row = await withStore("readonly", (s) => getPhotoById(s, localId));
+  if (!row?.remoteId) return;
+  const path =
+    typeof row.storage_path === "string" && row.storage_path
+      ? row.storage_path
+      : `${row.remoteId}.jpg`;
+  await window.LibrarySync.upsertUploadRecord({
+    id: row.remoteId,
+    caption: row.caption ?? "",
+    category: typeof row.category === "string" ? row.category : "",
+    storage_path: path,
+  });
+}
+
+function getPhotoById(store, id) {
+  return new Promise((resolve, reject) => {
+    const req = store.get(id);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function mergeRemoteUploadRows(remoteList) {
+  if (!remoteList?.length || !window.LibrarySync?.isConfigured?.()) return;
+  const localRows = await withStore("readonly", getAllPhotos);
+  const byRemote = new Map(
+    localRows.filter((r) => r.remoteId).map((r) => [r.remoteId, r])
+  );
+  for (const u of remoteList) {
+    const rid = u.id;
+    if (!rid) continue;
+    const existing = byRemote.get(rid);
+    const cat = u.category != null ? String(u.category).trim() : "";
+    const cap = u.caption != null ? String(u.caption) : "";
+    if (existing) {
+      const prevCap = existing.caption ?? "";
+      const prevCat =
+        typeof existing.category === "string" ? existing.category : "";
+      if (prevCap !== cap || prevCat !== cat) {
+        await withStore("readwrite", (s) =>
+          updateIdbUploadFields(
+            s,
+            existing.id,
+            { caption: cap, category: cat },
+            { skipRemote: true }
+          )
+        );
+      }
+    } else {
+      const storagePath =
+        u.storage_path && typeof u.storage_path === "string"
+          ? u.storage_path
+          : `${rid}.jpg`;
+      const url = window.LibrarySync.getPublicUrlForUpload(storagePath);
+      if (!url) continue;
+      let blob;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        blob = await res.blob();
+      } catch (e) {
+        console.warn("mergeRemoteUploadRows fetch", e);
+        continue;
+      }
+      const newId = await addPhotoFromBlob(blob, cap, {
+        remoteId: rid,
+        category: cat,
+        storage_path: storagePath,
+      });
+      byRemote.set(rid, { id: newId, remoteId: rid });
+    }
+  }
 }
 
 /**
@@ -893,6 +1032,10 @@ function getBlobUrl(id, blob) {
 }
 
 function categoryValueForItem(item) {
+  if (item.kind === "idb") {
+    const rc = item.row.category;
+    if (typeof rc === "string" && rc.trim()) return rc.trim();
+  }
   return getCategoryForKey(item.key) || "";
 }
 
@@ -980,6 +1123,56 @@ function buildCategoryField(current, itemKey) {
     clearTimeout(debounceTimer);
     setCategoryForKey(itemKey, input.value.trim());
     afterCategoryMutation().catch(console.error);
+  });
+
+  wrap.appendChild(lab);
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function buildCategoryFieldIdb(row) {
+  const key = itemKeyIdb(row.id);
+  const wrap = document.createElement("div");
+  wrap.className = "card-category-wrap";
+
+  const lab = document.createElement("span");
+  lab.className = "card-field-label";
+  lab.textContent = "Category";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "card-category";
+  input.setAttribute("list", CATEGORY_DATALIST_ID);
+  input.setAttribute("aria-label", "Category for this photo");
+  input.placeholder = "Type or choose a category";
+  input.value = (
+    (typeof row.category === "string" ? row.category : "") ||
+    getCategoryForKey(key) ||
+    ""
+  ).trim();
+  input.autocomplete = "off";
+
+  let debounceTimer;
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const v = input.value.trim();
+      withStore("readwrite", (s) =>
+        updateIdbUploadFields(s, row.id, { category: v })
+      )
+        .then(() => afterCategoryMutation().catch(console.error))
+        .catch(console.error);
+    }, 400);
+  });
+
+  input.addEventListener("blur", () => {
+    clearTimeout(debounceTimer);
+    const v = input.value.trim();
+    withStore("readwrite", (s) =>
+      updateIdbUploadFields(s, row.id, { category: v })
+    )
+      .then(() => afterCategoryMutation().catch(console.error))
+      .catch(console.error);
   });
 
   wrap.appendChild(lab);
@@ -1159,8 +1352,7 @@ function renderIdbCard(row, displayIndex) {
   meta.appendChild(document.createTextNode(` · Upload #${row.id}`));
   body.appendChild(meta);
 
-  const cat = getCategoryForKey(key);
-  body.appendChild(buildCategoryField(cat, key));
+  body.appendChild(buildCategoryFieldIdb(row));
 
   const ta = document.createElement("textarea");
   ta.className = "card-caption";
@@ -1197,11 +1389,25 @@ function renderIdbCard(row, displayIndex) {
   remove.addEventListener("click", async () => {
     if (!confirm("Remove this photo from the gallery?")) return;
     try {
+      const remoteId = row.remoteId;
+      const storagePath =
+        typeof row.storage_path === "string" && row.storage_path
+          ? row.storage_path
+          : remoteId
+            ? `${remoteId}.jpg`
+            : null;
       await withStore("readwrite", (s) => deletePhoto(s, row.id));
       revokeBlobUrl(row.id);
       const m = loadCategoryMap();
       delete m[key];
       saveCategoryMap(m);
+      if (
+        remoteId &&
+        storagePath &&
+        window.LibrarySync?.isConfigured?.()
+      ) {
+        await window.LibrarySync.deleteUpload(remoteId, storagePath);
+      }
       await refresh();
     } catch (e) {
       console.error(e);
@@ -1304,6 +1510,8 @@ async function refresh() {
       } else {
         const remoteRows = await window.LibrarySync.pull();
         mergeRemoteLibraryRows(remoteRows);
+        const uploadRows = await window.LibrarySync.pullUploads();
+        await mergeRemoteUploadRows(uploadRows);
         libraryPullOk = true;
       }
     } catch (e) {
