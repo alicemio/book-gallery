@@ -182,6 +182,8 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
   const btn = document.getElementById("lightbox-save-crop");
   if (!btn || btn.disabled) return;
   btn.disabled = true;
+  /** Copy now — closing the lightbox (e.g. Escape) clears `lightboxSourceItemKey` mid-save. */
+  const afterKey = lightboxSourceItemKey;
   try {
     const blob = await cropVisibleLightboxToBlob();
     if (!blob) {
@@ -192,7 +194,6 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
     }
     try {
       const newId = await addPhotoFromBlob(blob, "");
-      const afterKey = lightboxSourceItemKey;
       await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
     } catch (idbErr) {
       console.error(idbErr);
@@ -624,9 +625,14 @@ function addPhotoFromBlob(blob, caption = "") {
         const tx = db.transaction(STORE, "readwrite");
         const st = tx.objectStore(STORE);
         const req = st.add({ blob, caption });
-        req.onsuccess = () => resolve(req.result);
+        let newId;
+        req.onsuccess = () => {
+          newId = req.result;
+        };
         req.onerror = () => reject(req.error);
+        tx.oncomplete = () => resolve(newId);
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
       })
   );
 }
