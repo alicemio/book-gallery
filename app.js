@@ -1351,9 +1351,6 @@ function renderStaticCard(path, displayIndex) {
   const metaStrong = document.createElement("strong");
   metaStrong.textContent = `#${displayIndex}`;
   meta.appendChild(metaStrong);
-  meta.appendChild(
-    document.createTextNode(` · ${fileNameFromPath(path)}`)
-  );
   body.appendChild(meta);
 
   const cat = getCategoryForKey(key);
@@ -1440,7 +1437,6 @@ function renderIdbCard(row, displayIndex) {
   const metaStrong = document.createElement("strong");
   metaStrong.textContent = `#${displayIndex}`;
   meta.appendChild(metaStrong);
-  meta.appendChild(document.createTextNode(` · Upload #${row.id}`));
   body.appendChild(meta);
 
   body.appendChild(buildCategoryFieldIdb(row));
