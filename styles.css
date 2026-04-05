@@ -416,7 +416,7 @@ main {
   padding: 0.65rem 1rem;
   background: linear-gradient(180deg, #fffef9 0%, #f9f6f0 100%);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 0;
   box-shadow: var(--shadow);
 }
 
