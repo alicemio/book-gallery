@@ -470,6 +470,18 @@ main {
   border-color: var(--accent-hover);
 }
 
+/* Sticky bar — high-contrast CTA */
+.inquiry-btn.inquiry-sticky-cta {
+  background: #166534;
+  border-color: #14532d;
+  color: #fff;
+}
+
+.inquiry-btn.inquiry-sticky-cta:hover:not(:disabled) {
+  background: #14532d;
+  border-color: #0f3d22;
+}
+
 .inquiry-btn-muted {
   background: transparent;
   color: var(--muted);
