@@ -1,0 +1,1288 @@
+const DB_NAME = "book-gallery-v1";
+const STORE = "photos";
+const DB_VERSION = 1;
+const LS_CAPTION_PREFIX = "book-gallery-caption:";
+const LS_CATEGORY_BY_ITEM = "book-gallery-category-by-item";
+const LS_HIDDEN_STATIC = "book-gallery-hidden-static";
+const CATEGORY_DATALIST_ID = "gallery-category-datalist";
+/** Order of gallery card keys (`s:…` / `i:…`); includes manual placement, e.g. crops after their source. */
+const LS_ITEM_ORDER = "book-gallery-item-order";
+
+const staticImages = Array.isArray(window.BOOK_GALLERY_STATIC_IMAGES)
+  ? window.BOOK_GALLERY_STATIC_IMAGES
+  : [];
+
+const gallery = document.getElementById("gallery");
+const emptyState = document.getElementById("empty-state");
+const toolbar = document.getElementById("toolbar");
+const filterChips = document.getElementById("filter-chips");
+const filterEmpty = document.getElementById("filter-empty");
+const lightbox = document.getElementById("lightbox");
+const lightboxStage = document.getElementById("lightbox-stage");
+const lightboxImg = document.getElementById("lightbox-img");
+const lightboxClose = lightbox.querySelector(".lightbox-close");
+
+/** Set when opening the lightbox; used to place “save crop” uploads after the source card. */
+let lightboxSourceItemKey = null;
+
+let lbScale = 1;
+let lbTx = 0;
+let lbTy = 0;
+const LB_MIN = 1;
+const LB_MAX = 6;
+const LB_STEP = 1.25;
+
+let lbLastX = 0;
+let lbLastY = 0;
+/** Pointer is down on the lightbox stage while zoomed (tracking tap vs pan). */
+let lbGestureActive = false;
+/** True only after movement exceeds slop — then we pan and use pointer capture. */
+let lbPanning = false;
+let lbPanDownX = 0;
+let lbPanDownY = 0;
+
+function syncLightboxZoomButtons() {
+  const zIn = document.getElementById("lightbox-zoom-in");
+  const zOut = document.getElementById("lightbox-zoom-out");
+  const zReset = document.getElementById("lightbox-zoom-reset");
+  const cropBtn = document.getElementById("lightbox-save-crop");
+  if (!zIn || !zOut || !zReset) return;
+  zOut.disabled = lbScale <= 1.001;
+  zIn.disabled = lbScale >= LB_MAX - 0.02;
+  const atDefault =
+    lbScale <= 1.001 && Math.abs(lbTx) < 1 && Math.abs(lbTy) < 1;
+  zReset.disabled = atDefault;
+  if (cropBtn) {
+    const canCrop =
+      !lightbox.hidden &&
+      lightboxImg.naturalWidth > 0 &&
+      lightboxImg.naturalHeight > 0 &&
+      lbScale > 1.001;
+    cropBtn.disabled = !canCrop;
+  }
+}
+
+function resetLightboxZoom() {
+  lbScale = 1;
+  lbTx = 0;
+  lbTy = 0;
+  lbGestureActive = false;
+  lbPanning = false;
+  if (lightboxStage) {
+    lightboxStage.classList.remove("is-zoomed", "is-dragging");
+  }
+  lightboxImg.style.transform = "";
+  syncLightboxZoomButtons();
+}
+
+function applyLightboxZoom() {
+  if (lbScale <= 1) {
+    lbScale = 1;
+    lbTx = 0;
+    lbTy = 0;
+    lightboxImg.style.transform = "";
+    lightboxStage?.classList.remove("is-zoomed", "is-dragging");
+    syncLightboxZoomButtons();
+    return;
+  }
+  lightboxImg.style.transform = `translate(${lbTx}px, ${lbTy}px) scale(${lbScale})`;
+  lightboxStage?.classList.add("is-zoomed");
+  syncLightboxZoomButtons();
+}
+
+function lightboxZoomIn() {
+  lbScale = Math.min(LB_MAX, lbScale * LB_STEP);
+  applyLightboxZoom();
+}
+
+function lightboxZoomOut() {
+  lbScale = Math.max(LB_MIN, lbScale / LB_STEP);
+  if (lbScale <= 1.001) {
+    lbScale = 1;
+    lbTx = 0;
+    lbTy = 0;
+  }
+  applyLightboxZoom();
+}
+
+if (lightboxStage) {
+  lightboxStage.addEventListener("pointerdown", (e) => {
+    if (lightbox.hidden || lbScale <= 1) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    lbGestureActive = true;
+    lbPanning = false;
+    lbPanDownX = e.clientX;
+    lbPanDownY = e.clientY;
+    lbLastX = e.clientX;
+    lbLastY = e.clientY;
+  });
+
+  lightboxStage.addEventListener("pointermove", (e) => {
+    if (!lbGestureActive || lbScale <= 1) return;
+    if (!lbPanning) {
+      if (
+        Math.hypot(e.clientX - lbPanDownX, e.clientY - lbPanDownY) > 6
+      ) {
+        lbPanning = true;
+        try {
+          lightboxStage.setPointerCapture(e.pointerId);
+        } catch (_) {
+          /* noop */
+        }
+        lightboxStage.classList.add("is-dragging");
+        lbLastX = e.clientX;
+        lbLastY = e.clientY;
+      }
+      return;
+    }
+    lbTx += e.clientX - lbLastX;
+    lbTy += e.clientY - lbLastY;
+    lbLastX = e.clientX;
+    lbLastY = e.clientY;
+    lightboxImg.style.transform = `translate(${lbTx}px, ${lbTy}px) scale(${lbScale})`;
+    syncLightboxZoomButtons();
+  });
+
+  lightboxStage.addEventListener("pointerup", (e) => {
+    if (!lbGestureActive) return;
+    lbGestureActive = false;
+    if (lbPanning) {
+      lbPanning = false;
+      try {
+        lightboxStage.releasePointerCapture(e.pointerId);
+      } catch (_) {
+        /* noop */
+      }
+      lightboxStage.classList.remove("is-dragging");
+    }
+  });
+
+  lightboxStage.addEventListener("pointercancel", () => {
+    lbGestureActive = false;
+    lbPanning = false;
+    lightboxStage.classList.remove("is-dragging");
+  });
+}
+
+document.getElementById("lightbox-zoom-in")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxZoomIn();
+});
+document.getElementById("lightbox-zoom-out")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxZoomOut();
+});
+document.getElementById("lightbox-zoom-reset")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  resetLightboxZoom();
+});
+
+document.getElementById("lightbox-save-crop")?.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const btn = document.getElementById("lightbox-save-crop");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const blob = await cropVisibleLightboxToBlob();
+    if (!blob) {
+      alert(
+        "Could not create a crop. Zoom in first so part of the photo is visible in the frame. If you opened this page as a file on disk, use a local server (or Netlify) instead so the browser can read the image safely."
+      );
+      return;
+    }
+    try {
+      const newId = await addPhotoFromBlob(blob, "");
+      const afterKey = lightboxSourceItemKey;
+      await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
+    } catch (idbErr) {
+      console.error(idbErr);
+      alert(
+        "Could not store the photo in this browser (storage may be full or blocked). Check site settings or try another browser."
+      );
+      return;
+    }
+    closeLightbox();
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    const isSecurity =
+      err instanceof DOMException && err.name === "SecurityError";
+    alert(
+      isSecurity
+        ? "The browser blocked exporting this image (cross-origin restriction). Host the gallery and images on the same site, or use photos you added via Upload."
+        : `Could not save the crop: ${err instanceof Error ? err.message : String(err)}`
+    );
+  } finally {
+    syncLightboxZoomButtons();
+  }
+});
+
+lightboxImg.addEventListener("load", () => {
+  if (!lightbox.hidden) resetLightboxZoom();
+});
+
+lightboxImg.addEventListener("click", (e) => {
+  if (lightbox.hidden) return;
+  if (lbScale >= LB_MAX - 0.02) return;
+  e.stopPropagation();
+  lightboxZoomIn();
+});
+
+/** @type {{ type: 'all' } | { type: 'uncategorized' } | { type: 'category', name: string }} */
+let activeFilter = { type: "all" };
+
+/** Snapshot of gallery items for filtering (same order as cards in DOM). */
+let lastItems = [];
+
+/** Debounce timers for Supabase upserts (one per `images/…` path). */
+const syncStaticTimers = Object.create(null);
+let librarySyncSubscribed = false;
+let lastLibrarySyncError = null;
+
+function staticPathFromItemKey(key) {
+  return key.startsWith("s:") ? key.slice(2) : null;
+}
+
+function shouldCloudSyncPath(path) {
+  return (
+    typeof path === "string" &&
+    path.startsWith("images/") &&
+    staticImages.includes(path)
+  );
+}
+
+function queueCloudSyncForStaticPath(path) {
+  if (
+    typeof window.LibrarySync?.isConfigured !== "function" ||
+    !window.LibrarySync.isConfigured() ||
+    !shouldCloudSyncPath(path)
+  ) {
+    return;
+  }
+  clearTimeout(syncStaticTimers[path]);
+  syncStaticTimers[path] = setTimeout(() => {
+    delete syncStaticTimers[path];
+    const key = itemKeyStatic(path);
+    const cat = getCategoryForKey(key);
+    const notes = getStaticCaption(path);
+    window.LibrarySync.push(path, cat, notes);
+  }, 550);
+}
+
+function mergeRemoteLibraryRows(rows) {
+  if (!rows?.length) return;
+  const m = loadCategoryMap();
+  for (const row of rows) {
+    const path = row.image_path;
+    if (!path || typeof path !== "string") continue;
+    if (!shouldCloudSyncPath(path)) continue;
+    const key = itemKeyStatic(path);
+    const cat = row.category != null ? String(row.category).trim() : "";
+    if (cat) m[key] = cat;
+    else delete m[key];
+  }
+  saveCategoryMap(m);
+  for (const row of rows) {
+    const path = row.image_path;
+    if (!path || typeof path !== "string") continue;
+    if (!shouldCloudSyncPath(path)) continue;
+    setStaticCaption(
+      path,
+      row.notes != null ? String(row.notes) : "",
+      { skipRemote: true }
+    );
+  }
+}
+
+function updateSyncHint() {
+  const el = document.getElementById("sync-hint");
+  if (!el) return;
+  if (!window.LibrarySync?.isConfigured?.()) {
+    el.textContent = "";
+    el.hidden = true;
+    el.classList.remove("sync-hint-warn");
+    return;
+  }
+  el.hidden = false;
+  if (lastLibrarySyncError) {
+    el.textContent =
+      "Could not load the shared library (check Supabase URL, anon key, and SQL). Edits stay on this device until it works.";
+    el.classList.add("sync-hint-warn");
+  } else {
+    el.textContent =
+      "Notes and categories for book photos sync online; other visitors see updates shortly.";
+    el.classList.remove("sync-hint-warn");
+  }
+}
+
+function itemKeyStatic(path) {
+  return `s:${path}`;
+}
+
+function itemKeyIdb(id) {
+  return `i:${id}`;
+}
+
+function loadCategoryMap() {
+  try {
+    const raw = localStorage.getItem(LS_CATEGORY_BY_ITEM);
+    const o = raw ? JSON.parse(raw) : {};
+    return o && typeof o === "object" ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCategoryMap(map) {
+  localStorage.setItem(LS_CATEGORY_BY_ITEM, JSON.stringify(map));
+}
+
+function getCategoryForKey(key) {
+  const m = loadCategoryMap();
+  const v = m[key];
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function setCategoryForKey(key, categoryName, opts = {}) {
+  const m = loadCategoryMap();
+  const c = (categoryName || "").trim();
+  if (!c) delete m[key];
+  else m[key] = c;
+  saveCategoryMap(m);
+  if (!opts.skipRemote) {
+    const path = staticPathFromItemKey(key);
+    if (path) queueCloudSyncForStaticPath(path);
+  }
+}
+
+function allCategoryNamesFromAssignments() {
+  const m = loadCategoryMap();
+  const names = new Set(
+    Object.values(m).filter((v) => typeof v === "string" && v.trim())
+  );
+  return [...names].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+}
+
+function syncCategoryDatalist() {
+  const dl = document.getElementById(CATEGORY_DATALIST_ID);
+  if (!dl) return;
+  dl.replaceChildren();
+  for (const name of allCategoryNamesFromAssignments()) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    dl.appendChild(opt);
+  }
+}
+
+function staticCaptionKey(path) {
+  return LS_CAPTION_PREFIX + path;
+}
+
+function getStaticCaption(path) {
+  return localStorage.getItem(staticCaptionKey(path)) ?? "";
+}
+
+function setStaticCaption(path, value, opts = {}) {
+  localStorage.setItem(staticCaptionKey(path), value);
+  if (!opts.skipRemote) queueCloudSyncForStaticPath(path);
+}
+
+function loadHiddenStatic() {
+  try {
+    const raw = localStorage.getItem(LS_HIDDEN_STATIC);
+    const a = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(a) ? a : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveHiddenStatic(set) {
+  localStorage.setItem(LS_HIDDEN_STATIC, JSON.stringify([...set]));
+}
+
+function isStaticHidden(path) {
+  return loadHiddenStatic().has(path);
+}
+
+function hideStaticPath(path) {
+  const s = loadHiddenStatic();
+  s.add(path);
+  saveHiddenStatic(s);
+  const key = itemKeyStatic(path);
+  const m = loadCategoryMap();
+  delete m[key];
+  saveCategoryMap(m);
+  localStorage.removeItem(staticCaptionKey(path));
+}
+
+function unhideAllStatic() {
+  localStorage.removeItem(LS_HIDDEN_STATIC);
+}
+
+function visibleSortedStaticPaths() {
+  const hidden = loadHiddenStatic();
+  return [...staticImages]
+    .filter((p) => !hidden.has(p))
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+function loadItemOrder() {
+  try {
+    const raw = localStorage.getItem(LS_ITEM_ORDER);
+    const a = raw ? JSON.parse(raw) : null;
+    return Array.isArray(a) ? a : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveItemOrder(keys) {
+  localStorage.setItem(LS_ITEM_ORDER, JSON.stringify(keys));
+}
+
+/**
+ * Preserve saved sequence for keys that still exist; append any new keys in default order.
+ * @param {string[]} defaultKeys
+ * @param {string[] | null} savedKeys
+ */
+function mergeOrderKeys(defaultKeys, savedKeys) {
+  const present = new Set(defaultKeys);
+  const out = [];
+  const used = new Set();
+  if (savedKeys) {
+    for (const k of savedKeys) {
+      if (typeof k !== "string" || !present.has(k) || used.has(k)) continue;
+      out.push(k);
+      used.add(k);
+    }
+  }
+  for (const k of defaultKeys) {
+    if (!used.has(k)) {
+      out.push(k);
+      used.add(k);
+    }
+  }
+  return out;
+}
+
+function buildDefaultOrderedKeys(idbRows) {
+  const sortedStatic = visibleSortedStaticPaths();
+  const sortedIdb = [...idbRows].sort((a, b) => b.id - a.id);
+  const keys = [];
+  for (const path of sortedStatic) keys.push(itemKeyStatic(path));
+  for (const row of sortedIdb) keys.push(itemKeyIdb(row.id));
+  return keys;
+}
+
+function buildItemsMap(idbRows) {
+  const sortedStatic = visibleSortedStaticPaths();
+  /** @type {Map<string, { kind: string, path?: string, row?: object, key: string }>} */
+  const map = new Map();
+  for (const path of sortedStatic) {
+    const key = itemKeyStatic(path);
+    map.set(key, { kind: "static", path, key });
+  }
+  for (const row of idbRows) {
+    const key = itemKeyIdb(row.id);
+    map.set(key, { kind: "idb", row, key });
+  }
+  return map;
+}
+
+function fileNameFromPath(path) {
+  const i = path.lastIndexOf("/");
+  return i >= 0 ? path.slice(i + 1) : path;
+}
+
+function closeToolbarMenu() {
+  const menu = document.getElementById("toolbar-menu");
+  const btn = document.getElementById("toolbar-menu-btn");
+  menu?.classList.add("hidden");
+  btn?.setAttribute("aria-expanded", "false");
+}
+
+function toggleToolbarMenu() {
+  const menu = document.getElementById("toolbar-menu");
+  const btn = document.getElementById("toolbar-menu-btn");
+  if (!menu || !btn) return;
+  const willOpen = menu.classList.contains("hidden");
+  if (willOpen) {
+    menu.classList.remove("hidden");
+    btn.setAttribute("aria-expanded", "true");
+  } else {
+    closeToolbarMenu();
+  }
+}
+
+function updateToolbarMenuState() {
+  const item = document.getElementById("restore-hidden-item");
+  if (!item) return;
+  const n = loadHiddenStatic().size;
+  item.disabled = n === 0;
+  item.textContent =
+    n > 0 ? `Restore removed photos (${n})` : "No removed photos";
+}
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: "id", autoIncrement: true });
+      }
+    };
+  });
+}
+
+async function withStore(mode, fn) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, mode);
+    const store = tx.objectStore(STORE);
+    let result;
+    try {
+      result = fn(store);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("Transaction aborted"));
+  });
+}
+
+function getAllPhotos(store) {
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Place a new idb card key immediately after `afterKey` in the persisted gallery order.
+ * @param {string | null} afterKey `s:…` or `i:…`, or null to append
+ * @param {string} newKey e.g. `i:42`
+ */
+async function insertGalleryOrderAfterSource(afterKey, newKey) {
+  const rows = await withStore("readonly", getAllPhotos);
+  const defaultKeys = buildDefaultOrderedKeys(rows);
+  const saved = loadItemOrder();
+  let merged = mergeOrderKeys(defaultKeys, saved);
+  merged = merged.filter((k) => k !== newKey);
+  if (afterKey && merged.includes(afterKey)) {
+    const idx = merged.indexOf(afterKey);
+    merged.splice(idx + 1, 0, newKey);
+  } else {
+    merged.push(newKey);
+  }
+  saveItemOrder(merged);
+}
+
+function updateCaption(store, id, caption) {
+  return new Promise((resolve, reject) => {
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const row = getReq.result;
+      if (!row) {
+        reject(new Error("Not found"));
+        return;
+      }
+      row.caption = caption;
+      const putReq = store.put(row);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+function deletePhoto(store, id) {
+  return new Promise((resolve, reject) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * @param {Blob} blob
+ * @param {string} [caption]
+ * @returns {Promise<number>} new row id
+ */
+function addPhotoFromBlob(blob, caption = "") {
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const st = tx.objectStore(STORE);
+        const req = st.add({ blob, caption });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+        tx.onerror = () => reject(tx.error);
+      })
+  );
+}
+
+/**
+ * Intersect two DOM rects (viewport space).
+ * @returns {{ left: number, top: number, right: number, bottom: number, width: number, height: number } | null}
+ */
+function intersectClientRects(a, b) {
+  const left = Math.max(a.left, b.left);
+  const top = Math.max(a.top, b.top);
+  const right = Math.min(a.right, b.right);
+  const bottom = Math.min(a.bottom, b.bottom);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+/**
+ * Load pixels in a form that won’t taint the canvas (avoids SecurityError on toBlob).
+ * Falls back to using the lightbox <img> if fetch isn’t possible (e.g. some file:// cases).
+ * @returns {Promise<{ draw: HTMLImageElement | ImageBitmap, w: number, h: number, close?: () => void }>}
+ */
+async function getCroppedDrawableSource() {
+  const nw0 = lightboxImg.naturalWidth;
+  const nh0 = lightboxImg.naturalHeight;
+  const srcUrl = lightboxImg.currentSrc || lightboxImg.src;
+  if (!nw0 || !nh0 || !srcUrl) {
+    return { draw: lightboxImg, w: nw0, h: nh0 };
+  }
+  try {
+    const abs = new URL(srcUrl, document.baseURI).href;
+    const res = await fetch(abs, { mode: "cors", credentials: "omit" });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    if (typeof createImageBitmap === "function") {
+      const bitmap = await createImageBitmap(blob);
+      return {
+        draw: bitmap,
+        w: bitmap.width,
+        h: bitmap.height,
+        close: () => bitmap.close(),
+      };
+    }
+    return await new Promise((resolve, reject) => {
+      const objUrl = URL.createObjectURL(blob);
+      const im = new Image();
+      im.onload = () => {
+        URL.revokeObjectURL(objUrl);
+        resolve({
+          draw: im,
+          w: im.naturalWidth,
+          h: im.naturalHeight,
+          close: () => {},
+        });
+      };
+      im.onerror = () => {
+        URL.revokeObjectURL(objUrl);
+        reject(new Error("Could not decode image"));
+      };
+      im.src = objUrl;
+    });
+  } catch (e) {
+    console.warn("crop: using <img> fallback (fetch failed)", e);
+    return { draw: lightboxImg, w: nw0, h: nh0, close: () => {} };
+  }
+}
+
+/**
+ * Map the visible lightbox stage (viewport) onto full-resolution image pixels and rasterize.
+ * @returns {Promise<Blob | null>}
+ */
+async function cropVisibleLightboxToBlob() {
+  const nw0 = lightboxImg.naturalWidth;
+  const nh0 = lightboxImg.naturalHeight;
+  if (!nw0 || !nh0) return null;
+
+  const stageRect = lightboxStage.getBoundingClientRect();
+  const imgRect = lightboxImg.getBoundingClientRect();
+  const clip = intersectClientRects(stageRect, imgRect);
+  if (!clip || clip.width < 2 || clip.height < 2) return null;
+
+  const u0 = (clip.left - imgRect.left) / imgRect.width;
+  const u1 = (clip.right - imgRect.left) / imgRect.width;
+  const v0 = (clip.top - imgRect.top) / imgRect.height;
+  const v1 = (clip.bottom - imgRect.top) / imgRect.height;
+
+  let source;
+  try {
+    source = await getCroppedDrawableSource();
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+
+  const nw = source.w;
+  const nh = source.h;
+  let srcX = u0 * nw;
+  let srcY = v0 * nh;
+  let srcW = (u1 - u0) * nw;
+  let srcH = (v1 - v0) * nh;
+
+  srcX = Math.max(0, Math.min(nw - 1, srcX));
+  srcY = Math.max(0, Math.min(nh - 1, srcY));
+  srcW = Math.max(1, Math.min(nw - srcX, srcW));
+  srcH = Math.max(1, Math.min(nh - srcY, srcH));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(srcW));
+  canvas.height = Math.max(1, Math.round(srcH));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    source.close?.();
+    return null;
+  }
+  try {
+    ctx.drawImage(
+      source.draw,
+      srcX,
+      srcY,
+      srcW,
+      srcH,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+  } catch (e) {
+    console.error(e);
+    source.close?.();
+    return null;
+  }
+  source.close?.();
+
+  try {
+    return await new Promise((resolve) => {
+      canvas.toBlob(
+        (blob) => resolve(blob),
+        "image/jpeg",
+        0.92
+      );
+    });
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+const blobUrlCache = new Map();
+
+function revokeBlobUrl(id) {
+  const url = blobUrlCache.get(id);
+  if (url) {
+    URL.revokeObjectURL(url);
+    blobUrlCache.delete(id);
+  }
+}
+
+function getBlobUrl(id, blob) {
+  revokeBlobUrl(id);
+  const url = URL.createObjectURL(blob);
+  blobUrlCache.set(id, url);
+  return url;
+}
+
+function categoryValueForItem(item) {
+  return getCategoryForKey(item.key) || "";
+}
+
+function matchesActiveFilter(catValue) {
+  const val = catValue || "";
+  if (activeFilter.type === "all") return true;
+  if (activeFilter.type === "uncategorized") return !val;
+  if (activeFilter.type === "category") return val === activeFilter.name;
+  return true;
+}
+
+function filtersEqual(a, b) {
+  if (a.type !== b.type) return false;
+  if (a.type === "category" && b.type === "category") return a.name === b.name;
+  return true;
+}
+
+function filterIsActive(filter) {
+  return filtersEqual(activeFilter, filter);
+}
+
+function wireLightbox(thumbWrap, getSrc, getAlt, itemKey) {
+  const openLightbox = () => {
+    lightboxSourceItemKey = itemKey;
+    lightboxImg.src = getSrc();
+    lightboxImg.alt = getAlt();
+    resetLightboxZoom();
+    lightbox.hidden = false;
+    applyBodyScrollLock();
+    lightboxClose.focus();
+  };
+  thumbWrap.addEventListener("click", (e) => {
+    e.preventDefault();
+    openLightbox();
+  });
+  thumbWrap.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openLightbox();
+    }
+  });
+}
+
+async function afterCategoryMutation() {
+  const rows = await withStore("readonly", getAllPhotos);
+  lastItems = buildItems(rows);
+  syncCategoryDatalist();
+  toolbar.classList.toggle("hidden", lastItems.length === 0);
+  if (lastItems.length > 0) {
+    renderFilterChips(lastItems);
+  } else {
+    filterChips.innerHTML = "";
+    setToolbarTotalCount(0);
+  }
+  applyFilterVisibility();
+}
+
+function buildCategoryField(current, itemKey) {
+  const wrap = document.createElement("div");
+  wrap.className = "card-category-wrap";
+
+  const lab = document.createElement("span");
+  lab.className = "card-field-label";
+  lab.textContent = "Category";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "card-category";
+  input.setAttribute("list", CATEGORY_DATALIST_ID);
+  input.setAttribute("aria-label", "Category for this photo");
+  input.placeholder = "Type or choose a category";
+  input.value = current || "";
+  input.autocomplete = "off";
+
+  let debounceTimer;
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      setCategoryForKey(itemKey, input.value.trim());
+      afterCategoryMutation().catch(console.error);
+    }, 400);
+  });
+
+  input.addEventListener("blur", () => {
+    clearTimeout(debounceTimer);
+    setCategoryForKey(itemKey, input.value.trim());
+    afterCategoryMutation().catch(console.error);
+  });
+
+  wrap.appendChild(lab);
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function setToolbarTotalCount(n) {
+  const el = document.getElementById("toolbar-total");
+  if (!el) return;
+  if (n === 0) {
+    el.textContent = "0 photos total";
+    return;
+  }
+  el.textContent = n === 1 ? "1 photo total" : `${n} photos total`;
+}
+
+function renderFilterChips(items) {
+  setToolbarTotalCount(items.length);
+  filterChips.innerHTML = "";
+  const total = items.length;
+  const uncCount = items.filter((i) => !categoryValueForItem(i)).length;
+  const catNames = [
+    ...new Set(
+      items.map(categoryValueForItem).filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+  /**
+   * @param {string} label
+   * @param {{ type: 'all' } | { type: 'uncategorized' } | { type: 'category', name: string }} filter
+   * @param {number} count
+   */
+  const chip = (label, filter, count) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "filter-chip";
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", filterIsActive(filter) ? "true" : "false");
+    btn.textContent = `${label} (${count})`;
+    if (filterIsActive(filter)) btn.classList.add("is-active");
+    btn.addEventListener("click", () => {
+      activeFilter = filter;
+      renderFilterChips(lastItems);
+      applyFilterVisibility();
+    });
+    filterChips.appendChild(btn);
+  };
+
+  chip("All", { type: "all" }, total);
+  chip("Uncategorized", { type: "uncategorized" }, uncCount);
+  for (const name of catNames) {
+    const count = items.filter((i) => categoryValueForItem(i) === name).length;
+    chip(name, { type: "category", name }, count);
+  }
+}
+
+function renderStaticCard(path, displayIndex) {
+  const key = itemKeyStatic(path);
+  const li = document.createElement("li");
+  li.className = "card";
+  li.dataset.itemKey = key;
+  li.dataset.staticPath = path;
+
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "card-thumb-wrap";
+  thumbWrap.tabIndex = 0;
+  thumbWrap.setAttribute("role", "button");
+  thumbWrap.setAttribute("aria-label", "Open full size");
+
+  const img = document.createElement("img");
+  img.className = "card-thumb";
+  img.src = path;
+  const cap = getStaticCaption(path);
+  img.alt = cap.trim() ? cap.trim() : "Book photo";
+  img.loading = "lazy";
+
+  thumbWrap.appendChild(img);
+
+  const body = document.createElement("div");
+  body.className = "card-body";
+
+  const meta = document.createElement("p");
+  meta.className = "card-meta";
+  const metaStrong = document.createElement("strong");
+  metaStrong.textContent = `#${displayIndex}`;
+  meta.appendChild(metaStrong);
+  meta.appendChild(
+    document.createTextNode(` · ${fileNameFromPath(path)}`)
+  );
+  body.appendChild(meta);
+
+  const cat = getCategoryForKey(key);
+  body.appendChild(buildCategoryField(cat, key));
+
+  const ta = document.createElement("textarea");
+  ta.className = "card-caption";
+  ta.placeholder = "Title, author, notes…";
+  ta.value = cap;
+  ta.rows = 3;
+
+  let saveTimer;
+  const persist = () => setStaticCaption(path, ta.value);
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(persist, 400);
+  };
+
+  ta.addEventListener("input", () => {
+    img.alt = ta.value.trim() ? ta.value.trim() : "Book photo";
+    scheduleSave();
+  });
+  ta.addEventListener("blur", () => {
+    clearTimeout(saveTimer);
+    persist();
+  });
+
+  body.appendChild(ta);
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "remove-btn";
+  remove.textContent = "Remove from gallery";
+  remove.addEventListener("click", () => {
+    const fn = fileNameFromPath(path);
+    if (
+      !confirm(
+        `Remove “${fn}” from this gallery? The file stays on disk; restore it from the toolbar menu.`
+      )
+    ) {
+      return;
+    }
+    hideStaticPath(path);
+    refresh().catch(console.error);
+  });
+  actions.appendChild(remove);
+  body.appendChild(actions);
+
+  wireLightbox(thumbWrap, () => path, () => img.alt, key);
+
+  li.appendChild(thumbWrap);
+  li.appendChild(body);
+  gallery.appendChild(li);
+}
+
+function renderIdbCard(row, displayIndex) {
+  const key = itemKeyIdb(row.id);
+  const li = document.createElement("li");
+  li.className = "card";
+  li.dataset.itemKey = key;
+  li.dataset.id = String(row.id);
+
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "card-thumb-wrap";
+  thumbWrap.tabIndex = 0;
+  thumbWrap.setAttribute("role", "button");
+  thumbWrap.setAttribute("aria-label", "Open full size");
+
+  const img = document.createElement("img");
+  img.className = "card-thumb";
+  const url = getBlobUrl(row.id, row.blob);
+  img.src = url;
+  img.alt = row.caption?.trim() ? row.caption.trim() : "Book photo";
+
+  thumbWrap.appendChild(img);
+
+  const body = document.createElement("div");
+  body.className = "card-body";
+
+  const meta = document.createElement("p");
+  meta.className = "card-meta";
+  const metaStrong = document.createElement("strong");
+  metaStrong.textContent = `#${displayIndex}`;
+  meta.appendChild(metaStrong);
+  meta.appendChild(document.createTextNode(` · Upload #${row.id}`));
+  body.appendChild(meta);
+
+  const cat = getCategoryForKey(key);
+  body.appendChild(buildCategoryField(cat, key));
+
+  const ta = document.createElement("textarea");
+  ta.className = "card-caption";
+  ta.placeholder = "Title, author, notes…";
+  ta.value = row.caption ?? "";
+  ta.rows = 3;
+
+  let saveTimer;
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try {
+        await withStore("readwrite", (s) => updateCaption(s, row.id, ta.value));
+      } catch (e) {
+        console.error(e);
+      }
+    }, 400);
+  };
+
+  ta.addEventListener("input", scheduleSave);
+  ta.addEventListener("blur", () => {
+    clearTimeout(saveTimer);
+    withStore("readwrite", (s) => updateCaption(s, row.id, ta.value)).catch(
+      console.error
+    );
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "remove-btn";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", async () => {
+    if (!confirm("Remove this photo from the gallery?")) return;
+    try {
+      await withStore("readwrite", (s) => deletePhoto(s, row.id));
+      revokeBlobUrl(row.id);
+      const m = loadCategoryMap();
+      delete m[key];
+      saveCategoryMap(m);
+      await refresh();
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  actions.appendChild(remove);
+  body.appendChild(ta);
+  body.appendChild(actions);
+
+  wireLightbox(thumbWrap, () => url, () => img.alt, key);
+
+  li.appendChild(thumbWrap);
+  li.appendChild(body);
+  gallery.appendChild(li);
+}
+
+function buildItems(idbRows) {
+  const defaultKeys = buildDefaultOrderedKeys(idbRows);
+  const saved = loadItemOrder();
+  const orderedKeys = mergeOrderKeys(defaultKeys, saved);
+  const byKey = buildItemsMap(idbRows);
+  /** @type {{ kind: 'static', path: string, key: string } | { kind: 'idb', row: object, key: string }} */
+  const items = [];
+  for (const k of orderedKeys) {
+    const it = byKey.get(k);
+    if (it) items.push(it);
+  }
+  return items;
+}
+
+function applyFilterVisibility() {
+  const items = lastItems;
+  const total = items.length;
+  const filtered = items.filter((it) =>
+    matchesActiveFilter(categoryValueForItem(it))
+  );
+  const visibleKeys = new Set(filtered.map((it) => it.key));
+  for (const li of gallery.querySelectorAll("li.card")) {
+    const k = li.dataset.itemKey;
+    if (k) li.hidden = !visibleKeys.has(k);
+  }
+  filterEmpty.classList.toggle("hidden", !(total > 0 && filtered.length === 0));
+}
+
+function renderGallery(idbRows) {
+  gallery.innerHTML = "";
+  const items = buildItems(idbRows);
+  lastItems = items;
+  syncCategoryDatalist();
+
+  const total = items.length;
+  const manifestCount = staticImages.length;
+  const idbCount = idbRows.length;
+  const removedCount = loadHiddenStatic().size;
+  const allHidden =
+    total === 0 &&
+    removedCount > 0 &&
+    (manifestCount > 0 || idbCount > 0);
+  const noFiles = manifestCount === 0 && idbCount === 0;
+  const showToolbar =
+    total > 0 || removedCount > 0 || manifestCount > 0 || idbCount > 0;
+
+  toolbar.classList.toggle("hidden", !showToolbar);
+
+  const allHiddenEl = document.getElementById("all-hidden-state");
+  if (allHiddenEl) {
+    allHiddenEl.classList.toggle("hidden", !allHidden);
+  }
+
+  if (total > 0) {
+    renderFilterChips(items);
+  } else {
+    filterChips.innerHTML = "";
+    setToolbarTotalCount(0);
+  }
+
+  let displayIndex = 0;
+  for (const it of items) {
+    displayIndex += 1;
+    if (it.kind === "static") renderStaticCard(it.path, displayIndex);
+    else renderIdbCard(it.row, displayIndex);
+  }
+
+  applyFilterVisibility();
+  emptyState.classList.toggle("hidden", total > 0 || !noFiles || allHidden);
+  updateToolbarMenuState();
+}
+
+async function refresh() {
+  lastLibrarySyncError = null;
+  let libraryPullOk = false;
+  if (window.LibrarySync?.isConfigured?.()) {
+    try {
+      if (!window.LibrarySync.hasClient()) {
+        lastLibrarySyncError = new Error(
+          "Supabase client unavailable (check the CDN script and config keys)."
+        );
+      } else {
+        const remoteRows = await window.LibrarySync.pull();
+        mergeRemoteLibraryRows(remoteRows);
+        libraryPullOk = true;
+      }
+    } catch (e) {
+      console.error(e);
+      lastLibrarySyncError = e;
+    }
+  }
+  updateSyncHint();
+  const rows = await withStore("readonly", getAllPhotos);
+  renderGallery(rows);
+
+  if (
+    window.LibrarySync?.isConfigured?.() &&
+    window.LibrarySync.hasClient() &&
+    libraryPullOk &&
+    !librarySyncSubscribed
+  ) {
+    librarySyncSubscribed = true;
+    let debounceRemote;
+    window.LibrarySync.subscribe(() => {
+      clearTimeout(debounceRemote);
+      debounceRemote = setTimeout(() => {
+        refresh().catch(console.error);
+      }, 450);
+    });
+  }
+}
+
+function applyBodyScrollLock() {
+  document.body.style.overflow = lightbox.hidden ? "" : "hidden";
+}
+
+function closeLightbox() {
+  resetLightboxZoom();
+  lightbox.hidden = true;
+  lightboxImg.src = "";
+  lightboxImg.alt = "";
+  lightboxSourceItemKey = null;
+  applyBodyScrollLock();
+}
+
+lightboxClose.addEventListener("click", closeLightbox);
+lightbox.addEventListener("click", (e) => {
+  if (e.target === lightbox) closeLightbox();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!lightbox.hidden) closeLightbox();
+    else closeToolbarMenu();
+  }
+});
+
+document.getElementById("toolbar-menu-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleToolbarMenu();
+});
+
+document.querySelector(".toolbar-menu-wrap")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+});
+
+document.addEventListener("click", () => {
+  closeToolbarMenu();
+});
+
+document.getElementById("restore-hidden-item")?.addEventListener("click", () => {
+  const n = loadHiddenStatic().size;
+  if (n === 0) return;
+  if (
+    !confirm(
+      `Bring back all ${n} removed photo(s)? They will appear in the grid again.`
+    )
+  ) {
+    return;
+  }
+  unhideAllStatic();
+  closeToolbarMenu();
+  refresh().catch(console.error);
+});
+
+refresh().catch(console.error);

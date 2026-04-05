@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prof. Lewis Cook's Online Library</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=Source+Sans+3:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <h1>Prof. Lewis Cook's Online Library</h1>
+        <p class="tagline">
+          Label each image by adding a category and adding notes on its card. Click a
+          thumbnail to open it and zoom in.
+        </p>
+        <p id="sync-hint" class="sync-hint" hidden></p>
+      </div>
+    </header>
+
+    <main>
+      <div id="toolbar" class="toolbar hidden" aria-label="Gallery filters">
+        <div class="toolbar-leading">
+          <span class="toolbar-label">Filter</span>
+          <span id="toolbar-total" class="toolbar-total" aria-live="polite"></span>
+        </div>
+        <div
+          id="filter-chips"
+          class="filter-chips"
+          role="tablist"
+          aria-label="Filter by category"
+        ></div>
+        <div class="toolbar-menu-wrap">
+          <button
+            type="button"
+            id="toolbar-menu-btn"
+            class="toolbar-tools-btn"
+            aria-expanded="false"
+            aria-haspopup="menu"
+            aria-controls="toolbar-menu"
+            aria-label="Open tools menu"
+          >
+            <svg
+              class="toolbar-tools-icon"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+              />
+            </svg>
+          </button>
+          <div
+            id="toolbar-menu"
+            class="toolbar-menu hidden"
+            role="menu"
+            aria-labelledby="toolbar-menu-btn"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              id="restore-hidden-item"
+              class="toolbar-menu-item"
+              disabled
+            >
+              No removed photos
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        id="filter-empty"
+        class="filter-empty hidden"
+        role="status"
+        aria-live="polite"
+      >
+        <p>
+          No photos in this category. Pick another filter or edit the category on each
+          card below.
+        </p>
+      </div>
+      <div id="empty-state" class="empty-state hidden" aria-live="polite">
+        <p>
+          No photos yet. Add files to the <code>images</code> folder and run
+          <code>python3 update-manifest.py</code>.
+        </p>
+      </div>
+      <div id="all-hidden-state" class="empty-state hidden" aria-live="polite">
+        <p>
+          Everything is removed from the gallery view. Open the tools menu (wrench) in
+          the bar above and choose Restore removed photos (files on disk are unchanged).
+        </p>
+      </div>
+      <ul id="gallery" class="gallery" role="list"></ul>
+    </main>
+
+    <div
+      id="lightbox"
+      class="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Full size image"
+      hidden
+    >
+      <button type="button" class="lightbox-close" aria-label="Close">
+        &times;
+      </button>
+      <div class="lightbox-toolbar" role="toolbar" aria-label="Image zoom">
+        <button
+          type="button"
+          id="lightbox-zoom-out"
+          class="lightbox-tool-btn"
+          aria-label="Zoom out"
+        >
+          Zoom out
+        </button>
+        <button
+          type="button"
+          id="lightbox-zoom-reset"
+          class="lightbox-tool-btn"
+          aria-label="Reset zoom"
+        >
+          Reset
+        </button>
+        <button
+          type="button"
+          id="lightbox-zoom-in"
+          class="lightbox-tool-btn"
+          aria-label="Zoom in"
+        >
+          Zoom in
+        </button>
+        <button
+          type="button"
+          id="lightbox-save-crop"
+          class="lightbox-tool-btn lightbox-tool-btn-accent"
+          aria-label="Save visible area as a new gallery photo"
+          disabled
+        >
+          Save crop to gallery
+        </button>
+      </div>
+      <p class="lightbox-hint">
+        Zoom in and drag to frame part of the image, then save that view as a new photo in
+        your gallery (stored in this browser).
+      </p>
+      <div class="lightbox-stage" id="lightbox-stage">
+        <img id="lightbox-img" src="" alt="" draggable="false" />
+      </div>
+    </div>
+
+    <datalist id="gallery-category-datalist"></datalist>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js"></script>
+    <script src="supabase-config.js"></script>
+    <script src="library-sync.js"></script>
+    <script src="images-manifest.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

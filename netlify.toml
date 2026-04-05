@@ -1,0 +1,9 @@
+[build]
+  command = "node scripts/inject-supabase-config.mjs && python3 update-manifest.py"
+  publish = "."
+
+# Set in Netlify UI → Site settings → Environment variables:
+#   SUPABASE_URL = https://YOUR_PROJECT.supabase.co
+#   SUPABASE_ANON_KEY = your anon public key
+#
+# Optional: remove python3 step from `command` if images never change in CI.
