@@ -1172,11 +1172,9 @@ function openInquiryModal() {
   const offline = document.getElementById("inquiry-modal-offline");
   const form = document.getElementById("inquiry-form");
   const err = document.getElementById("inquiry-form-error");
-  const ok = document.getElementById("inquiry-form-success");
   const summary = document.getElementById("inquiry-modal-summary");
   const submitBtn = document.getElementById("inquiry-submit-btn");
   if (!modal || !form || !summary) return;
-  ok?.classList.add("hidden");
   err?.classList.add("hidden");
   const configured = !!window.LibrarySync?.isConfigured?.();
   offline?.classList.toggle("hidden", configured);
@@ -1835,10 +1833,8 @@ document.getElementById("inquiry-form")?.addEventListener("submit", async (e) =>
   const email = (fd.get("requester_email") || "").toString();
   const message = (fd.get("message") || "").toString();
   const errEl = document.getElementById("inquiry-form-error");
-  const okEl = document.getElementById("inquiry-form-success");
   const submitBtn = document.getElementById("inquiry-submit-btn");
   errEl?.classList.add("hidden");
-  okEl?.classList.add("hidden");
   const books = [...inquirySnapshots.values()].sort(
     (a, b) => a.display_index - b.display_index
   );
@@ -1859,7 +1855,6 @@ document.getElementById("inquiry-form")?.addEventListener("submit", async (e) =>
   if (submitBtn) submitBtn.disabled = true;
   try {
     await window.LibrarySync.submitBookInquiry({ name, email, message, books });
-    okEl?.classList.remove("hidden");
     form.reset();
     inquirySelectedKeys.clear();
     inquirySnapshots.clear();
@@ -1867,10 +1862,8 @@ document.getElementById("inquiry-form")?.addEventListener("submit", async (e) =>
     for (const cb of document.querySelectorAll(".card-inquiry-cb")) {
       cb.checked = false;
     }
-    setTimeout(() => {
-      closeInquiryModal();
-      if (submitBtn) submitBtn.disabled = false;
-    }, 1600);
+    closeInquiryModal();
+    if (submitBtn) submitBtn.disabled = false;
   } catch (er) {
     console.error(er);
     if (errEl) {

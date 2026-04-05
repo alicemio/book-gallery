@@ -636,12 +636,6 @@ main {
   color: #8b2e2e;
 }
 
-.inquiry-form-success {
-  margin: 0.75rem 0 0;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
 .lightbox {
   position: fixed;
   inset: 0;
