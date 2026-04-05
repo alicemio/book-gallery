@@ -396,11 +396,55 @@ function getCategoryForKey(key) {
   return typeof v === "string" ? v.trim() : "";
 }
 
-function setCategoryForKey(key, categoryName, opts = {}) {
+function dedupeCategoryNames(names) {
+  const seen = new Set();
+  const out = [];
+  for (const x of names) {
+    const t = String(x).trim();
+    if (!t) continue;
+    const low = t.toLowerCase();
+    if (seen.has(low)) continue;
+    seen.add(low);
+    out.push(t);
+  }
+  return out;
+}
+
+/** @param {string} raw — legacy plain string or JSON array string */
+function parseCategoriesFromStorage(raw) {
+  if (raw == null) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  if (s.startsWith("[")) {
+    try {
+      const p = JSON.parse(s);
+      if (Array.isArray(p)) {
+        return dedupeCategoryNames(p.map((x) => String(x)));
+      }
+    } catch {
+      /* single string */
+    }
+  }
+  return [s];
+}
+
+/** @param {string[]} names */
+function serializeCategoriesToStorage(names) {
+  const cleaned = dedupeCategoryNames(names);
+  if (cleaned.length === 0) return "";
+  if (cleaned.length === 1) return cleaned[0];
+  return JSON.stringify(cleaned);
+}
+
+function getCategoryListForKey(key) {
+  return parseCategoriesFromStorage(getCategoryForKey(key));
+}
+
+function setCategoriesForKey(key, names, opts = {}) {
   const m = loadCategoryMap();
-  const c = (categoryName || "").trim();
-  if (!c) delete m[key];
-  else m[key] = c;
+  const storage = serializeCategoriesToStorage(names || []);
+  if (!storage) delete m[key];
+  else m[key] = storage;
   saveCategoryMap(m);
   if (!opts.skipRemote) {
     const path = staticPathFromItemKey(key);
@@ -408,14 +452,32 @@ function setCategoryForKey(key, categoryName, opts = {}) {
   }
 }
 
+function setCategoryForKey(key, categoryName, opts = {}) {
+  const c = (categoryName || "").trim();
+  setCategoriesForKey(key, c ? [c] : [], opts);
+}
+
 function allCategoryNamesFromAssignments() {
   const m = loadCategoryMap();
-  const names = new Set(
-    Object.values(m).filter((v) => typeof v === "string" && v.trim())
-  );
+  const names = new Set();
+  for (const v of Object.values(m)) {
+    if (typeof v !== "string" || !v.trim()) continue;
+    for (const c of parseCategoriesFromStorage(v.trim())) names.add(c);
+  }
   return [...names].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
   );
+}
+
+/** @returns {string[]} */
+function categoryListForItem(item) {
+  let raw = "";
+  if (item.kind === "idb") {
+    const rc = item.row.category;
+    if (typeof rc === "string" && rc.trim()) raw = rc.trim();
+  }
+  if (!raw) raw = getCategoryForKey(item.key);
+  return parseCategoriesFromStorage(raw);
 }
 
 function syncCategoryDatalist() {
@@ -423,8 +485,7 @@ function syncCategoryDatalist() {
   if (!dl) return;
   const names = new Set(allCategoryNamesFromAssignments());
   for (const it of lastItems) {
-    const c = categoryValueForItem(it);
-    if (c) names.add(c);
+    for (const c of categoryListForItem(it)) names.add(c);
   }
   const sorted = [...names].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -1210,19 +1271,11 @@ function closeInquirySuccessModal() {
   document.body.style.overflow = "";
 }
 
-function categoryValueForItem(item) {
-  if (item.kind === "idb") {
-    const rc = item.row.category;
-    if (typeof rc === "string" && rc.trim()) return rc.trim();
-  }
-  return getCategoryForKey(item.key) || "";
-}
-
-function matchesActiveFilter(catValue) {
-  const val = catValue || "";
+function matchesActiveFilter(catList) {
+  const list = Array.isArray(catList) ? catList : [];
   if (activeFilter.type === "all") return true;
-  if (activeFilter.type === "uncategorized") return !val;
-  if (activeFilter.type === "category") return val === activeFilter.name;
+  if (activeFilter.type === "uncategorized") return list.length === 0;
+  if (activeFilter.type === "category") return list.includes(activeFilter.name);
   return true;
 }
 
@@ -1272,90 +1325,192 @@ async function afterCategoryMutation() {
   applyFilterVisibility();
 }
 
-function buildCategoryField(current, itemKey) {
+function buildCategoryFieldMultiStatic(itemKey) {
   const wrap = document.createElement("div");
   wrap.className = "card-category-wrap";
 
   const lab = document.createElement("span");
   lab.className = "card-field-label";
-  lab.textContent = "Category";
+  lab.textContent = "Categories";
+
+  const chipsContainer = document.createElement("div");
+  chipsContainer.className = "card-category-chips";
+
+  const addRow = document.createElement("div");
+  addRow.className = "card-category-add-row";
 
   const input = document.createElement("input");
   input.type = "text";
   input.className = "card-category";
   input.setAttribute("list", CATEGORY_DATALIST_ID);
-  input.setAttribute("aria-label", "Category for this photo");
-  input.placeholder = "Type or choose a category";
-  input.value = current || "";
+  input.setAttribute("aria-label", "Add a category");
+  input.placeholder = "Add category, press Enter or Add";
   input.autocomplete = "off";
 
-  let debounceTimer;
-  input.addEventListener("input", () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      setCategoryForKey(itemKey, input.value.trim());
-      afterCategoryMutation().catch(console.error);
-    }, 400);
-  });
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "category-add-btn";
+  addBtn.textContent = "Add";
 
-  input.addEventListener("blur", () => {
-    clearTimeout(debounceTimer);
-    setCategoryForKey(itemKey, input.value.trim());
+  let categories = [...getCategoryListForKey(itemKey)];
+
+  function persist() {
+    setCategoriesForKey(itemKey, categories, {});
     afterCategoryMutation().catch(console.error);
+  }
+
+  function renderChips() {
+    chipsContainer.replaceChildren();
+    for (const name of categories) {
+      const chipEl = document.createElement("span");
+      chipEl.className = "category-chip";
+      const label = document.createElement("span");
+      label.textContent = name;
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "category-chip-remove";
+      rm.innerHTML = "&times;";
+      rm.setAttribute("aria-label", `Remove category ${name}`);
+      rm.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        categories = categories.filter((c) => c !== name);
+        renderChips();
+        persist();
+      });
+      chipEl.appendChild(label);
+      chipEl.appendChild(rm);
+      chipsContainer.appendChild(chipEl);
+    }
+  }
+
+  function addFromInput() {
+    const v = input.value.trim();
+    if (!v) return;
+    if (!categories.some((c) => c.toLowerCase() === v.toLowerCase())) {
+      categories.push(v);
+      renderChips();
+      persist();
+    }
+    input.value = "";
+  }
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addFromInput();
+    }
+  });
+  addBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    addFromInput();
   });
 
+  renderChips();
+  addRow.appendChild(input);
+  addRow.appendChild(addBtn);
   wrap.appendChild(lab);
-  wrap.appendChild(input);
+  wrap.appendChild(chipsContainer);
+  wrap.appendChild(addRow);
   return wrap;
 }
 
-function buildCategoryFieldIdb(row) {
+function buildCategoryFieldMultiIdb(row) {
   const key = itemKeyIdb(row.id);
   const wrap = document.createElement("div");
   wrap.className = "card-category-wrap";
 
   const lab = document.createElement("span");
   lab.className = "card-field-label";
-  lab.textContent = "Category";
+  lab.textContent = "Categories";
+
+  const chipsContainer = document.createElement("div");
+  chipsContainer.className = "card-category-chips";
+
+  const addRow = document.createElement("div");
+  addRow.className = "card-category-add-row";
 
   const input = document.createElement("input");
   input.type = "text";
   input.className = "card-category";
   input.setAttribute("list", CATEGORY_DATALIST_ID);
-  input.setAttribute("aria-label", "Category for this photo");
-  input.placeholder = "Type or choose a category";
-  input.value = (
-    (typeof row.category === "string" ? row.category : "") ||
-    getCategoryForKey(key) ||
-    ""
-  ).trim();
+  input.setAttribute("aria-label", "Add a category");
+  input.placeholder = "Add category, press Enter or Add";
   input.autocomplete = "off";
 
-  let debounceTimer;
-  input.addEventListener("input", () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      const v = input.value.trim();
-      withStore("readwrite", (s) =>
-        updateIdbUploadFields(s, row.id, { category: v })
-      )
-        .then(() => afterCategoryMutation().catch(console.error))
-        .catch(console.error);
-    }, 400);
-  });
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "category-add-btn";
+  addBtn.textContent = "Add";
 
-  input.addEventListener("blur", () => {
-    clearTimeout(debounceTimer);
-    const v = input.value.trim();
+  const rawInitial =
+    (typeof row.category === "string" && row.category.trim()
+      ? row.category
+      : getCategoryForKey(key)) || "";
+  let categories = [...parseCategoriesFromStorage(rawInitial)];
+
+  function persistIdb() {
+    const storage = serializeCategoriesToStorage(categories);
     withStore("readwrite", (s) =>
-      updateIdbUploadFields(s, row.id, { category: v })
+      updateIdbUploadFields(s, row.id, { category: storage })
     )
       .then(() => afterCategoryMutation().catch(console.error))
       .catch(console.error);
+  }
+
+  function renderChips() {
+    chipsContainer.replaceChildren();
+    for (const name of categories) {
+      const chipEl = document.createElement("span");
+      chipEl.className = "category-chip";
+      const label = document.createElement("span");
+      label.textContent = name;
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "category-chip-remove";
+      rm.innerHTML = "&times;";
+      rm.setAttribute("aria-label", `Remove category ${name}`);
+      rm.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        categories = categories.filter((c) => c !== name);
+        renderChips();
+        persistIdb();
+      });
+      chipEl.appendChild(label);
+      chipEl.appendChild(rm);
+      chipsContainer.appendChild(chipEl);
+    }
+  }
+
+  function addFromInput() {
+    const v = input.value.trim();
+    if (!v) return;
+    if (!categories.some((c) => c.toLowerCase() === v.toLowerCase())) {
+      categories.push(v);
+      renderChips();
+      persistIdb();
+    }
+    input.value = "";
+  }
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addFromInput();
+    }
+  });
+  addBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    addFromInput();
   });
 
+  renderChips();
+  addRow.appendChild(input);
+  addRow.appendChild(addBtn);
   wrap.appendChild(lab);
-  wrap.appendChild(input);
+  wrap.appendChild(chipsContainer);
+  wrap.appendChild(addRow);
   return wrap;
 }
 
@@ -1373,11 +1528,9 @@ function renderFilterChips(items) {
   setToolbarTotalCount(items.length);
   filterChips.innerHTML = "";
   const total = items.length;
-  const uncCount = items.filter((i) => !categoryValueForItem(i)).length;
+  const uncCount = items.filter((i) => categoryListForItem(i).length === 0).length;
   const catNames = [
-    ...new Set(
-      items.map(categoryValueForItem).filter(Boolean)
-    ),
+    ...new Set(items.flatMap((i) => categoryListForItem(i))),
   ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
   /**
@@ -1404,7 +1557,7 @@ function renderFilterChips(items) {
   chip("All", { type: "all" }, total);
   chip("Uncategorized", { type: "uncategorized" }, uncCount);
   for (const name of catNames) {
-    const count = items.filter((i) => categoryValueForItem(i) === name).length;
+    const count = items.filter((i) => categoryListForItem(i).includes(name)).length;
     chip(name, { type: "category", name }, count);
   }
 }
@@ -1456,8 +1609,7 @@ function renderStaticCard(path, displayIndex) {
     );
   }
 
-  const cat = getCategoryForKey(key);
-  body.appendChild(buildCategoryField(cat, key));
+  body.appendChild(buildCategoryFieldMultiStatic(key));
 
   const ta = document.createElement("textarea");
   ta.className = "card-caption";
@@ -1557,7 +1709,7 @@ function renderIdbCard(row, displayIndex) {
     );
   }
 
-  body.appendChild(buildCategoryFieldIdb(row));
+  body.appendChild(buildCategoryFieldMultiIdb(row));
 
   const ta = document.createElement("textarea");
   ta.className = "card-caption";
@@ -1648,7 +1800,7 @@ function applyFilterVisibility() {
   const items = lastItems;
   const total = items.length;
   const filtered = items.filter((it) =>
-    matchesActiveFilter(categoryValueForItem(it))
+    matchesActiveFilter(categoryListForItem(it))
   );
   const visibleKeys = new Set(filtered.map((it) => it.key));
   for (const li of gallery.querySelectorAll("li.card")) {

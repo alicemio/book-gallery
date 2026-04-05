@@ -265,6 +265,85 @@ main {
   border-color: transparent;
 }
 
+.card-category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem 0.4rem 0.2rem 0.55rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: #ebe8e2;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  max-width: 100%;
+}
+
+.category-chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 10rem;
+}
+
+.category-chip-remove {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.category-chip-remove:hover {
+  color: #8b2e2e;
+  background: rgba(139, 46, 46, 0.08);
+}
+
+.card-category-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.card-category-add-row .card-category {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.category-add-btn {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.category-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .empty-state {
   text-align: center;
   padding: 3rem 1rem;
