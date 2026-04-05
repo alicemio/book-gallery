@@ -84,19 +84,25 @@ const LibrarySync = (() => {
       return data?.publicUrl ?? "";
     },
 
+    /** @returns {Promise<{ error: Error | null }>} */
     async uploadImageBlob(storagePath, blob, contentType = "image/jpeg") {
       const sb = getClient();
-      if (!sb) return;
+      if (!sb) return { error: new Error("Supabase client unavailable") };
       const { error } = await sb.storage.from(UPLOAD_BUCKET).upload(storagePath, blob, {
         contentType,
         upsert: true,
       });
-      if (error) console.error("LibrarySync.uploadImageBlob", error);
+      if (error) {
+        console.error("LibrarySync.uploadImageBlob", error);
+        return { error: new Error(error.message || String(error)) };
+      }
+      return { error: null };
     },
 
+    /** @returns {Promise<{ error: Error | null }>} */
     async upsertUploadRecord(record) {
       const sb = getClient();
-      if (!sb) return;
+      if (!sb) return { error: new Error("Supabase client unavailable") };
       const { error } = await sb.from("library_uploads").upsert(
         {
           id: record.id,
@@ -109,7 +115,11 @@ const LibrarySync = (() => {
         },
         { onConflict: "id" }
       );
-      if (error) console.error("LibrarySync.upsertUploadRecord", error);
+      if (error) {
+        console.error("LibrarySync.upsertUploadRecord", error);
+        return { error: new Error(error.message || String(error)) };
+      }
+      return { error: null };
     },
 
     async deleteUpload(remoteId, storagePath) {

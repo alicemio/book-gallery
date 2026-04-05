@@ -16,6 +16,28 @@ const staticImages = Array.isArray(window.BOOK_GALLERY_STATIC_IMAGES)
   : [];
 
 /**
+ * UUID for cropped-upload `remoteId`. Prefer `crypto.randomUUID`; fall back to `getRandomValues`
+ * so crops still sync on older browsers that lack `randomUUID`.
+ */
+function randomUuidForUpload() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    return "";
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  let hex = "";
+  for (let i = 0; i < 16; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
  * Static card thumbs use Netlify Image CDN on deployed hosts: smaller dimensions plus AVIF/WebP
  * via content negotiation. Full-resolution `path` is still used in the lightbox. Local file or
  * localhost dev keeps raw `images/…` URLs (use `netlify dev` to exercise CDN locally).
@@ -228,11 +250,14 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
       return;
     }
     try {
-      const useCloud =
-        typeof crypto !== "undefined" &&
-        typeof crypto.randomUUID === "function" &&
-        window.LibrarySync?.isConfigured?.();
-      const remoteId = useCloud ? crypto.randomUUID() : null;
+      const configured = !!window.LibrarySync?.isConfigured?.();
+      const uuid = configured ? randomUuidForUpload() : "";
+      const remoteId = uuid || null;
+      if (configured && !remoteId) {
+        alert(
+          "Could not create a sync id in this browser; the crop is saved only here. Use an up-to-date browser over HTTPS (or try Chrome/Firefox)."
+        );
+      }
       const sourceMeta = await sourceMetaForLightboxKey(afterKey);
       const newId = await addPhotoFromBlob(blob, "", {
         ...sourceMeta,
@@ -240,7 +265,16 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
       });
       await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
       if (remoteId) {
-        syncNewLocalUploadToCloud(newId, remoteId).catch(console.error);
+        try {
+          await syncNewLocalUploadToCloud(newId, remoteId);
+        } catch (syncErr) {
+          console.error(syncErr);
+          alert(
+            `The crop was saved on this device but did not fully upload to the shared library, so others may not see it yet.\n\n${
+              syncErr instanceof Error ? syncErr.message : String(syncErr)
+            }\n\nCheck the Supabase Storage bucket, row limits, and browser network; then try saving again or re-crop.`
+          );
+        }
       }
     } catch (idbErr) {
       console.error(idbErr);
@@ -918,10 +952,11 @@ function addPhotoFromBlob(blob, caption = "", extra = {}) {
 async function syncNewLocalUploadToCloud(localId, remoteId) {
   if (!window.LibrarySync?.isConfigured?.() || !remoteId) return;
   const row = await withStore("readonly", (s) => getPhotoById(s, localId));
-  if (!row?.blob) return;
+  if (!row?.blob) throw new Error("Cropped photo missing from browser storage");
   const path = `${remoteId}.jpg`;
-  await window.LibrarySync.uploadImageBlob(path, row.blob);
-  await window.LibrarySync.upsertUploadRecord({
+  const up = await window.LibrarySync.uploadImageBlob(path, row.blob);
+  if (up?.error) throw up.error;
+  const rec = await window.LibrarySync.upsertUploadRecord({
     id: remoteId,
     caption: row.caption ?? "",
     category: typeof row.category === "string" ? row.category : "",
@@ -929,6 +964,9 @@ async function syncNewLocalUploadToCloud(localId, remoteId) {
     source_static_path: row.source_static_path ?? null,
     source_upload_id: row.source_upload_id ?? null,
   });
+  if (rec?.error) {
+    throw rec.error;
+  }
 }
 
 async function syncIdbUploadToCloudIfNeeded(localId) {
@@ -939,7 +977,7 @@ async function syncIdbUploadToCloudIfNeeded(localId) {
     typeof row.storage_path === "string" && row.storage_path
       ? row.storage_path
       : `${row.remoteId}.jpg`;
-  await window.LibrarySync.upsertUploadRecord({
+  const rec = await window.LibrarySync.upsertUploadRecord({
     id: row.remoteId,
     caption: row.caption ?? "",
     category: typeof row.category === "string" ? row.category : "",
@@ -947,6 +985,7 @@ async function syncIdbUploadToCloudIfNeeded(localId) {
     source_static_path: row.source_static_path ?? null,
     source_upload_id: row.source_upload_id ?? null,
   });
+  if (rec?.error) console.error("syncIdbUploadToCloudIfNeeded", rec.error);
 }
 
 function getPhotoById(store, id) {
@@ -963,7 +1002,15 @@ async function mergeRemoteUploadRows(remoteList) {
   const byRemote = new Map(
     localRows
       .filter((r) => r.remoteId)
-      .map((r) => [String(r.remoteId), { id: r.id, remoteId: r.remoteId }])
+      .map((r) => [
+        String(r.remoteId),
+        {
+          id: r.id,
+          remoteId: r.remoteId,
+          caption: r.caption,
+          category: typeof r.category === "string" ? r.category : "",
+        },
+      ])
   );
   for (const u of remoteList) {
     const rid = u.id;
@@ -1008,7 +1055,12 @@ async function mergeRemoteUploadRows(remoteList) {
         source_static_path: u.source_static_path ?? null,
         source_upload_id: u.source_upload_id ?? null,
       });
-      byRemote.set(String(rid), { id: newId, remoteId: rid });
+      byRemote.set(String(rid), {
+        id: newId,
+        remoteId: rid,
+        caption: cap,
+        category: cat,
+      });
       const placementAfter = afterKeyFromRemoteUploadRow(u, byRemote);
       if (placementAfter) {
         await insertGalleryOrderAfterSource(
