@@ -552,12 +552,6 @@ main {
   color: var(--ink);
 }
 
-.inquiry-modal-offline {
-  margin: 0 0 0.75rem;
-  font-size: 0.85rem;
-  color: #b45309;
-}
-
 .inquiry-modal-summary {
   margin: 0 0 1rem;
   padding-left: 1.15rem;
@@ -634,6 +628,27 @@ main {
   margin: 0;
   font-size: 0.85rem;
   color: #8b2e2e;
+}
+
+.inquiry-success-modal {
+  z-index: 1150;
+}
+
+.inquiry-success-panel {
+  text-align: center;
+}
+
+.inquiry-success-message {
+  margin: 0 0 1.25rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.inquiry-success-panel .inquiry-btn-primary {
+  width: 100%;
+  max-width: 12rem;
 }
 
 .lightbox {

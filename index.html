@@ -196,9 +196,6 @@
           &times;
         </button>
         <h2 id="inquiry-modal-title" class="inquiry-modal-title">Request books</h2>
-        <p id="inquiry-modal-offline" class="inquiry-modal-offline hidden">
-          Online requests are not available on this copy of the site (library connection missing).
-        </p>
         <ol id="inquiry-modal-summary" class="inquiry-modal-summary"></ol>
         <form id="inquiry-form" class="inquiry-form">
           <input
@@ -232,6 +229,26 @@
             Send request
           </button>
         </form>
+      </div>
+    </div>
+
+    <div
+      id="inquiry-success-modal"
+      class="inquiry-modal inquiry-success-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inquiry-success-title"
+      hidden
+    >
+      <div class="inquiry-modal-backdrop" id="inquiry-success-backdrop"></div>
+      <div class="inquiry-modal-panel inquiry-success-panel">
+        <h2 id="inquiry-success-title" class="inquiry-modal-title">Request sent</h2>
+        <p class="inquiry-success-message">
+          Thank you—we received your request.
+        </p>
+        <button type="button" class="inquiry-btn inquiry-btn-primary" id="inquiry-success-ok">
+          OK
+        </button>
       </div>
     </div>
 

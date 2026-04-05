@@ -1169,7 +1169,6 @@ function syncInquiryStickyBar() {
 function openInquiryModal() {
   if (inquirySnapshots.size === 0) return;
   const modal = document.getElementById("inquiry-modal");
-  const offline = document.getElementById("inquiry-modal-offline");
   const form = document.getElementById("inquiry-form");
   const err = document.getElementById("inquiry-form-error");
   const summary = document.getElementById("inquiry-modal-summary");
@@ -1177,7 +1176,6 @@ function openInquiryModal() {
   if (!modal || !form || !summary) return;
   err?.classList.add("hidden");
   const configured = !!window.LibrarySync?.isConfigured?.();
-  offline?.classList.toggle("hidden", configured);
   if (submitBtn) submitBtn.disabled = !configured;
   summary.replaceChildren();
   const books = [...inquirySnapshots.values()].sort(
@@ -1194,6 +1192,25 @@ function openInquiryModal() {
 
 function closeInquiryModal() {
   const modal = document.getElementById("inquiry-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  const successOpen = (() => {
+    const s = document.getElementById("inquiry-success-modal");
+    return s && !s.hidden;
+  })();
+  if (!successOpen) document.body.style.overflow = "";
+}
+
+function openInquirySuccessModal() {
+  const modal = document.getElementById("inquiry-success-modal");
+  if (!modal) return;
+  modal.hidden = false;
+  document.body.style.overflow = "hidden";
+  document.getElementById("inquiry-success-ok")?.focus();
+}
+
+function closeInquirySuccessModal() {
+  const modal = document.getElementById("inquiry-success-modal");
   if (!modal) return;
   modal.hidden = true;
   document.body.style.overflow = "";
@@ -1755,6 +1772,11 @@ lightbox.addEventListener("click", (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    const succ = document.getElementById("inquiry-success-modal");
+    if (succ && !succ.hidden) {
+      closeInquirySuccessModal();
+      return;
+    }
     const inq = document.getElementById("inquiry-modal");
     if (inq && !inq.hidden) {
       closeInquiryModal();
@@ -1821,6 +1843,8 @@ document.getElementById("inquiry-clear-btn")?.addEventListener("click", () => {
 });
 document.getElementById("inquiry-modal-close")?.addEventListener("click", closeInquiryModal);
 document.getElementById("inquiry-modal-backdrop")?.addEventListener("click", closeInquiryModal);
+document.getElementById("inquiry-success-ok")?.addEventListener("click", closeInquirySuccessModal);
+document.getElementById("inquiry-success-backdrop")?.addEventListener("click", closeInquirySuccessModal);
 document.getElementById("inquiry-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target;
@@ -1864,6 +1888,7 @@ document.getElementById("inquiry-form")?.addEventListener("submit", async (e) =>
     }
     closeInquiryModal();
     if (submitBtn) submitBtn.disabled = false;
+    openInquirySuccessModal();
   } catch (er) {
     console.error(er);
     if (errEl) {
