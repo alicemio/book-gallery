@@ -566,15 +566,10 @@ main {
 
 .inquiry-modal-summary {
   margin: 0 0 1rem;
-  padding-left: 1.15rem;
   font-family: var(--font-ui);
-  font-size: 0.85rem;
-  color: var(--ink);
+  font-size: 0.9rem;
+  color: var(--muted);
   line-height: 1.45;
-}
-
-.inquiry-modal-summary li {
-  margin-bottom: 0.25rem;
 }
 
 .inquiry-form {

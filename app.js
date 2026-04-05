@@ -1177,15 +1177,9 @@ function openInquiryModal() {
   err?.classList.add("hidden");
   const configured = !!window.LibrarySync?.isConfigured?.();
   if (submitBtn) submitBtn.disabled = !configured;
-  summary.replaceChildren();
-  const books = [...inquirySnapshots.values()].sort(
-    (a, b) => a.display_index - b.display_index
-  );
-  for (const b of books) {
-    const li = document.createElement("li");
-    li.textContent = `#${b.display_index} — ${b.label || "(no notes)"}`;
-    summary.appendChild(li);
-  }
+  const n = inquirySnapshots.size;
+  summary.textContent =
+    n === 1 ? "1 image selected." : `${n} images selected.`;
   modal.hidden = false;
   document.body.style.overflow = "hidden";
 }
