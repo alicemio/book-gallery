@@ -233,11 +233,11 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
         typeof crypto.randomUUID === "function" &&
         window.LibrarySync?.isConfigured?.();
       const remoteId = useCloud ? crypto.randomUUID() : null;
-      const newId = await addPhotoFromBlob(
-        blob,
-        "",
-        remoteId ? { remoteId } : {}
-      );
+      const sourceMeta = await sourceMetaForLightboxKey(afterKey);
+      const newId = await addPhotoFromBlob(blob, "", {
+        ...sourceMeta,
+        ...(remoteId ? { remoteId } : {}),
+      });
       await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
       if (remoteId) {
         syncNewLocalUploadToCloud(newId, remoteId).catch(console.error);
@@ -732,6 +732,44 @@ async function insertGalleryOrderAfterSource(afterKey, newKey) {
   saveItemOrder(merged);
 }
 
+/**
+ * Maps lightbox source to Supabase columns so other browsers can run the same
+ * insert-after-source ordering after pull.
+ */
+async function sourceMetaForLightboxKey(itemKey) {
+  if (!itemKey || typeof itemKey !== "string") {
+    return { source_static_path: null, source_upload_id: null };
+  }
+  if (itemKey.startsWith("s:")) {
+    return { source_static_path: itemKey.slice(2), source_upload_id: null };
+  }
+  if (itemKey.startsWith("i:")) {
+    const id = Number(itemKey.slice(2));
+    if (!Number.isFinite(id)) {
+      return { source_static_path: null, source_upload_id: null };
+    }
+    const row = await withStore("readonly", (s) => getPhotoById(s, id));
+    if (row?.remoteId) {
+      return { source_static_path: null, source_upload_id: row.remoteId };
+    }
+  }
+  return { source_static_path: null, source_upload_id: null };
+}
+
+/** @param {object} row — Supabase library_uploads row */
+function afterKeyFromRemoteUploadRow(row, byRemote) {
+  const sp = row.source_static_path;
+  if (sp != null && String(sp).trim()) {
+    return itemKeyStatic(String(sp).trim());
+  }
+  const su = row.source_upload_id;
+  if (su != null && String(su).trim()) {
+    const parent = byRemote.get(String(su));
+    if (parent && parent.id != null) return itemKeyIdb(parent.id);
+  }
+  return null;
+}
+
 function updateCaption(store, id, caption) {
   return new Promise((resolve, reject) => {
     const getReq = store.get(id);
@@ -822,6 +860,8 @@ async function syncNewLocalUploadToCloud(localId, remoteId) {
     caption: row.caption ?? "",
     category: typeof row.category === "string" ? row.category : "",
     storage_path: path,
+    source_static_path: row.source_static_path ?? null,
+    source_upload_id: row.source_upload_id ?? null,
   });
 }
 
@@ -838,6 +878,8 @@ async function syncIdbUploadToCloudIfNeeded(localId) {
     caption: row.caption ?? "",
     category: typeof row.category === "string" ? row.category : "",
     storage_path: path,
+    source_static_path: row.source_static_path ?? null,
+    source_upload_id: row.source_upload_id ?? null,
   });
 }
 
@@ -853,12 +895,14 @@ async function mergeRemoteUploadRows(remoteList) {
   if (!remoteList?.length || !window.LibrarySync?.isConfigured?.()) return;
   const localRows = await withStore("readonly", getAllPhotos);
   const byRemote = new Map(
-    localRows.filter((r) => r.remoteId).map((r) => [r.remoteId, r])
+    localRows
+      .filter((r) => r.remoteId)
+      .map((r) => [String(r.remoteId), { id: r.id, remoteId: r.remoteId }])
   );
   for (const u of remoteList) {
     const rid = u.id;
     if (!rid) continue;
-    const existing = byRemote.get(rid);
+    const existing = byRemote.get(String(rid));
     const cat = u.category != null ? String(u.category).trim() : "";
     const cap = u.caption != null ? String(u.caption) : "";
     if (existing) {
@@ -895,8 +939,17 @@ async function mergeRemoteUploadRows(remoteList) {
         remoteId: rid,
         category: cat,
         storage_path: storagePath,
+        source_static_path: u.source_static_path ?? null,
+        source_upload_id: u.source_upload_id ?? null,
       });
-      byRemote.set(rid, { id: newId, remoteId: rid });
+      byRemote.set(String(rid), { id: newId, remoteId: rid });
+      const placementAfter = afterKeyFromRemoteUploadRow(u, byRemote);
+      if (placementAfter) {
+        await insertGalleryOrderAfterSource(
+          placementAfter,
+          itemKeyIdb(newId)
+        );
+      }
     }
   }
 }

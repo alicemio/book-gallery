@@ -44,8 +44,10 @@ const LibrarySync = (() => {
       if (!sb) return [];
       const { data, error } = await sb
         .from("library_uploads")
-        .select("id,caption,category,storage_path,updated_at")
-        .order("updated_at", { ascending: false });
+        .select(
+          "id,caption,category,storage_path,updated_at,source_static_path,source_upload_id"
+        )
+        .order("updated_at", { ascending: true });
       if (error) throw error;
       return data || [];
     },
@@ -102,6 +104,8 @@ const LibrarySync = (() => {
           category: record.category ?? "",
           storage_path: record.storage_path,
           updated_at: new Date().toISOString(),
+          source_static_path: record.source_static_path ?? null,
+          source_upload_id: record.source_upload_id ?? null,
         },
         { onConflict: "id" }
       );

@@ -34,7 +34,10 @@ create table if not exists public.library_uploads (
   caption text not null default '',
   category text not null default '',
   storage_path text not null,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- So other devices can place the crop after the same source as the author.
+  source_static_path text,
+  source_upload_id uuid
 );
 
 alter table public.library_uploads enable row level security;
@@ -71,3 +74,10 @@ create policy "library_uploads_storage_update"
 create policy "library_uploads_storage_delete"
   on storage.objects for delete
   using (bucket_id = 'library-uploads');
+
+-- Existing projects: add columns once (safe to re-run on PostgreSQL 11+).
+alter table public.library_uploads
+  add column if not exists source_static_path text;
+
+alter table public.library_uploads
+  add column if not exists source_upload_id uuid;
