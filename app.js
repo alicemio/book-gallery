@@ -1,6 +1,9 @@
 const DB_NAME = "book-gallery-v1";
 const STORE = "photos";
-const DB_VERSION = 1;
+const META_STORE = "meta";
+/** Row id in `meta` store — mirrors LS_HIDDEN_STATIC so removals survive flaky localStorage. */
+const HIDDEN_META_ID = "hidden-static-paths";
+const DB_VERSION = 2;
 const LS_CAPTION_PREFIX = "book-gallery-caption:";
 const LS_CATEGORY_BY_ITEM = "book-gallery-category-by-item";
 const LS_HIDDEN_STATIC = "book-gallery-hidden-static";
@@ -390,7 +393,7 @@ function setStaticCaption(path, value, opts = {}) {
   if (!opts.skipRemote) queueCloudSyncForStaticPath(path);
 }
 
-function loadHiddenStatic() {
+function parseHiddenStaticFromLocalStorage() {
   try {
     const raw = localStorage.getItem(LS_HIDDEN_STATIC);
     const a = raw ? JSON.parse(raw) : [];
@@ -400,8 +403,91 @@ function loadHiddenStatic() {
   }
 }
 
+/** Live Set; same reference returned from `loadHiddenStatic()` so callers can mutate then save. */
+let hiddenStaticMerged = parseHiddenStaticFromLocalStorage();
+
+function loadHiddenStatic() {
+  return hiddenStaticMerged;
+}
+
 function saveHiddenStatic(set) {
-  localStorage.setItem(LS_HIDDEN_STATIC, JSON.stringify([...set]));
+  hiddenStaticMerged = set instanceof Set ? set : new Set(set);
+  try {
+    localStorage.setItem(
+      LS_HIDDEN_STATIC,
+      JSON.stringify([...hiddenStaticMerged])
+    );
+  } catch (e) {
+    console.warn("book-gallery: could not save hidden list to localStorage", e);
+  }
+  mirrorHiddenStaticToIdb(hiddenStaticMerged).catch((e) =>
+    console.warn("book-gallery: could not mirror hidden list to IndexedDB", e)
+  );
+}
+
+async function mirrorHiddenStaticToIdb(set) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readwrite");
+    tx.objectStore(META_STORE).put({
+      id: HIDDEN_META_ID,
+      paths: [...set],
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("aborted"));
+  });
+}
+
+async function readHiddenStaticFromIdb() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readonly");
+    const req = tx.objectStore(META_STORE).get(HIDDEN_META_ID);
+    req.onsuccess = () => {
+      const row = req.result;
+      if (!row || !Array.isArray(row.paths)) resolve(new Set());
+      else
+        resolve(
+          new Set(row.paths.filter((p) => typeof p === "string" && p.trim()))
+        );
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * After refresh, merge IndexedDB mirror into memory + heal localStorage if LS was cleared.
+ */
+async function mergeHiddenStaticFromIdb() {
+  let fromIdb;
+  try {
+    fromIdb = await readHiddenStaticFromIdb();
+  } catch (e) {
+    console.warn("book-gallery: read hidden mirror", e);
+    return;
+  }
+  let changed = false;
+  for (const p of fromIdb) {
+    if (!hiddenStaticMerged.has(p)) {
+      hiddenStaticMerged.add(p);
+      changed = true;
+    }
+  }
+  if (fromIdb.size === 0 && hiddenStaticMerged.size > 0) {
+    await mirrorHiddenStaticToIdb(hiddenStaticMerged);
+    return;
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(
+        LS_HIDDEN_STATIC,
+        JSON.stringify([...hiddenStaticMerged])
+      );
+    } catch (e) {
+      console.warn("book-gallery: heal hidden localStorage", e);
+    }
+  }
 }
 
 function isStaticHidden(path) {
@@ -420,7 +506,11 @@ function hideStaticPath(path) {
 }
 
 function unhideAllStatic() {
+  hiddenStaticMerged = new Set();
   localStorage.removeItem(LS_HIDDEN_STATIC);
+  mirrorHiddenStaticToIdb(hiddenStaticMerged).catch((e) =>
+    console.warn("book-gallery: clear hidden mirror", e)
+  );
 }
 
 function visibleSortedStaticPaths() {
@@ -536,6 +626,9 @@ function openDb() {
       const db = e.target.result;
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: "id", autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains(META_STORE)) {
+        db.createObjectStore(META_STORE, { keyPath: "id" });
       }
     };
   });
@@ -1199,6 +1292,7 @@ function renderGallery(idbRows) {
 }
 
 async function refresh() {
+  await mergeHiddenStaticFromIdb();
   lastLibrarySyncError = null;
   let libraryPullOk = false;
   if (window.LibrarySync?.isConfigured?.()) {
