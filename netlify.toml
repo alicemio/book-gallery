@@ -2,6 +2,14 @@
   command = "node scripts/inject-supabase-config.mjs && python3 update-manifest.py"
   publish = "."
 
+# Supabase’s anon (publishable) key is meant to appear in browser code; the build writes it
+# into supabase-config.js. If that variable is flagged “Contains secret values” in Netlify,
+# secret scanning would fail the build unless we omit it here (still never put the service role
+# key in the client).
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY"
+  SECRETS_SCAN_OMIT_PATHS = "supabase-config.js"
+
 # Set in Netlify UI → Site settings → Environment variables:
 #   SUPABASE_URL = https://YOUR_PROJECT.supabase.co
 #   SUPABASE_ANON_KEY = your anon public key
