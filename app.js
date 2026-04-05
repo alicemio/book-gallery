@@ -1552,6 +1552,9 @@ function setToolbarTotalCount(n) {
   el.textContent = n === 1 ? "1 photo total" : `${n} photos total`;
 }
 
+const FILTER_SELECT_UNC = "uncategorized";
+const FILTER_SELECT_CAT_PREFIX = "c:";
+
 function renderFilterChips(items) {
   setToolbarTotalCount(items.length);
   filterChips.innerHTML = "";
@@ -1561,33 +1564,78 @@ function renderFilterChips(items) {
     ...new Set(items.flatMap((i) => categoryListForItem(i))),
   ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
-  /**
-   * @param {string} label
-   * @param {{ type: 'all' } | { type: 'uncategorized' } | { type: 'category', name: string }} filter
-   * @param {number} count
-   */
-  const chip = (label, filter, count) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "filter-chip";
-    btn.setAttribute("role", "tab");
-    btn.setAttribute("aria-selected", filterIsActive(filter) ? "true" : "false");
-    btn.textContent = `${label} (${count})`;
-    if (filterIsActive(filter)) btn.classList.add("is-active");
-    btn.addEventListener("click", () => {
-      activeFilter = filter;
-      renderFilterChips(lastItems);
-      applyFilterVisibility();
-    });
-    filterChips.appendChild(btn);
-  };
+  if (
+    activeFilter.type === "category" &&
+    !catNames.includes(activeFilter.name)
+  ) {
+    activeFilter = { type: "all" };
+  }
 
-  chip("All", { type: "all" }, total);
-  chip("Uncategorized", { type: "uncategorized" }, uncCount);
+  const allBtn = document.createElement("button");
+  allBtn.type = "button";
+  allBtn.className = "filter-chip filter-chip-all";
+  allBtn.setAttribute("aria-pressed", filterIsActive({ type: "all" }) ? "true" : "false");
+  allBtn.textContent = total === 1 ? `All (1)` : `All (${total})`;
+  if (filterIsActive({ type: "all" })) allBtn.classList.add("is-active");
+  allBtn.addEventListener("click", () => {
+    activeFilter = { type: "all" };
+    renderFilterChips(lastItems);
+    applyFilterVisibility();
+  });
+  filterChips.appendChild(allBtn);
+
+  const sel = document.createElement("select");
+  sel.className = "filter-category-select";
+  sel.setAttribute("aria-label", "Narrow by category");
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Categories…";
+  sel.appendChild(placeholder);
+
+  const optUnc = document.createElement("option");
+  optUnc.value = FILTER_SELECT_UNC;
+  optUnc.textContent =
+    uncCount === 1
+      ? "Uncategorized (1)"
+      : `Uncategorized (${uncCount})`;
+  sel.appendChild(optUnc);
+
   for (const name of catNames) {
     const count = items.filter((i) => categoryListForItem(i).includes(name)).length;
-    chip(name, { type: "category", name }, count);
+    const opt = document.createElement("option");
+    opt.value = `${FILTER_SELECT_CAT_PREFIX}${encodeURIComponent(name)}`;
+    opt.textContent = `${name} (${count})`;
+    sel.appendChild(opt);
   }
+
+  if (activeFilter.type === "all") {
+    sel.value = "";
+  } else if (activeFilter.type === "uncategorized") {
+    sel.value = FILTER_SELECT_UNC;
+  } else {
+    sel.value = `${FILTER_SELECT_CAT_PREFIX}${encodeURIComponent(activeFilter.name)}`;
+  }
+
+  sel.addEventListener("change", () => {
+    const v = sel.value;
+    if (v === "") {
+      activeFilter = { type: "all" };
+    } else if (v === FILTER_SELECT_UNC) {
+      activeFilter = { type: "uncategorized" };
+    } else if (v.startsWith(FILTER_SELECT_CAT_PREFIX)) {
+      try {
+        const name = decodeURIComponent(v.slice(FILTER_SELECT_CAT_PREFIX.length));
+        activeFilter = { type: "category", name };
+      } catch {
+        activeFilter = { type: "all" };
+      }
+    }
+    renderFilterChips(lastItems);
+    applyFilterVisibility();
+  });
+
+  filterChips.appendChild(sel);
 }
 
 function renderStaticCard(path, displayIndex) {
