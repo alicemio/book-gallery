@@ -282,6 +282,11 @@ let activeFilter = { type: "all" };
 /** Snapshot of gallery items for filtering (same order as cards in DOM). */
 let lastItems = [];
 
+/** Multi-book visitor inquiry: card keys `s:…` / `i:…` and payload rows for Supabase. */
+const inquirySelectedKeys = new Set();
+/** @type {Map<string, { item_key: string, display_index: number, kind: string, label: string, image_path: string | null, upload_id: string | null }>} */
+const inquirySnapshots = new Map();
+
 /** Debounce timers for Supabase upserts (one per `images/…` path). */
 const syncStaticTimers = Object.create(null);
 let librarySyncSubscribed = false;
@@ -1116,6 +1121,86 @@ function getBlobUrl(id, blob) {
   return url;
 }
 
+function buildInquirySelectRow(itemKey, displayIndex, kind, labelText, extra) {
+  const row = document.createElement("div");
+  row.className = "card-inquiry-row";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.className = "card-inquiry-cb";
+  cb.checked = inquirySelectedKeys.has(itemKey);
+  cb.addEventListener("click", (e) => e.stopPropagation());
+  cb.addEventListener("change", () => {
+    if (cb.checked) {
+      inquirySelectedKeys.add(itemKey);
+      inquirySnapshots.set(itemKey, {
+        item_key: itemKey,
+        display_index: displayIndex,
+        kind,
+        label: (labelText || "").slice(0, 800),
+        image_path: extra.image_path ?? null,
+        upload_id: extra.upload_id ?? null,
+      });
+    } else {
+      inquirySelectedKeys.delete(itemKey);
+      inquirySnapshots.delete(itemKey);
+    }
+    syncInquiryStickyBar();
+  });
+  const lab = document.createElement("label");
+  lab.className = "card-inquiry-label";
+  lab.appendChild(cb);
+  const span = document.createElement("span");
+  span.textContent = "Request";
+  lab.appendChild(span);
+  row.appendChild(lab);
+  return row;
+}
+
+function syncInquiryStickyBar() {
+  const el = document.getElementById("inquiry-sticky");
+  if (!el) return;
+  const n = inquirySelectedKeys.size;
+  const configured = !!window.LibrarySync?.isConfigured?.();
+  el.hidden = n === 0 || !configured;
+  const c = el.querySelector(".inquiry-sticky-count");
+  if (c) c.textContent = String(n);
+}
+
+function openInquiryModal() {
+  if (inquirySnapshots.size === 0) return;
+  const modal = document.getElementById("inquiry-modal");
+  const offline = document.getElementById("inquiry-modal-offline");
+  const form = document.getElementById("inquiry-form");
+  const err = document.getElementById("inquiry-form-error");
+  const ok = document.getElementById("inquiry-form-success");
+  const summary = document.getElementById("inquiry-modal-summary");
+  const submitBtn = document.getElementById("inquiry-submit-btn");
+  if (!modal || !form || !summary) return;
+  ok?.classList.add("hidden");
+  err?.classList.add("hidden");
+  const configured = !!window.LibrarySync?.isConfigured?.();
+  offline?.classList.toggle("hidden", configured);
+  if (submitBtn) submitBtn.disabled = !configured;
+  summary.replaceChildren();
+  const books = [...inquirySnapshots.values()].sort(
+    (a, b) => a.display_index - b.display_index
+  );
+  for (const b of books) {
+    const li = document.createElement("li");
+    li.textContent = `#${b.display_index} — ${b.label || "(no notes)"}`;
+    summary.appendChild(li);
+  }
+  modal.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+
+function closeInquiryModal() {
+  const modal = document.getElementById("inquiry-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.style.overflow = "";
+}
+
 function categoryValueForItem(item) {
   if (item.kind === "idb") {
     const rc = item.row.category;
@@ -1353,6 +1438,15 @@ function renderStaticCard(path, displayIndex) {
   meta.appendChild(metaStrong);
   body.appendChild(meta);
 
+  if (window.LibrarySync?.isConfigured?.()) {
+    body.appendChild(
+      buildInquirySelectRow(key, displayIndex, "static", cap.trim() || `Book #${displayIndex}`, {
+        image_path: path,
+        upload_id: null,
+      })
+    );
+  }
+
   const cat = getCategoryForKey(key);
   body.appendChild(buildCategoryField(cat, key));
 
@@ -1438,6 +1532,21 @@ function renderIdbCard(row, displayIndex) {
   metaStrong.textContent = `#${displayIndex}`;
   meta.appendChild(metaStrong);
   body.appendChild(meta);
+
+  if (window.LibrarySync?.isConfigured?.()) {
+    body.appendChild(
+      buildInquirySelectRow(
+        key,
+        displayIndex,
+        "upload",
+        row.caption?.trim() || `Photo #${displayIndex}`,
+        {
+          image_path: null,
+          upload_id: row.remoteId ? String(row.remoteId) : null,
+        }
+      )
+    );
+  }
 
   body.appendChild(buildCategoryFieldIdb(row));
 
@@ -1582,6 +1691,7 @@ function renderGallery(idbRows) {
   applyFilterVisibility();
   emptyState.classList.toggle("hidden", total > 0 || !noFiles || allHidden);
   updateToolbarMenuState();
+  syncInquiryStickyBar();
 }
 
 async function refresh() {
@@ -1647,6 +1757,11 @@ lightbox.addEventListener("click", (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    const inq = document.getElementById("inquiry-modal");
+    if (inq && !inq.hidden) {
+      closeInquiryModal();
+      return;
+    }
     if (!lightbox.hidden) closeLightbox();
     else closeToolbarMenu();
   }
@@ -1696,5 +1811,77 @@ function showGalleryInitError(err) {
   const filterEmptyEl = document.getElementById("filter-empty");
   filterEmptyEl?.classList.add("hidden");
 }
+
+document.getElementById("inquiry-open-form-btn")?.addEventListener("click", openInquiryModal);
+document.getElementById("inquiry-clear-btn")?.addEventListener("click", () => {
+  inquirySelectedKeys.clear();
+  inquirySnapshots.clear();
+  syncInquiryStickyBar();
+  for (const cb of document.querySelectorAll(".card-inquiry-cb")) {
+    cb.checked = false;
+  }
+});
+document.getElementById("inquiry-modal-close")?.addEventListener("click", closeInquiryModal);
+document.getElementById("inquiry-modal-backdrop")?.addEventListener("click", closeInquiryModal);
+document.getElementById("inquiry-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  if ((fd.get("website") || "").toString().trim()) {
+    closeInquiryModal();
+    return;
+  }
+  const name = (fd.get("requester_name") || "").toString();
+  const email = (fd.get("requester_email") || "").toString();
+  const message = (fd.get("message") || "").toString();
+  const errEl = document.getElementById("inquiry-form-error");
+  const okEl = document.getElementById("inquiry-form-success");
+  const submitBtn = document.getElementById("inquiry-submit-btn");
+  errEl?.classList.add("hidden");
+  okEl?.classList.add("hidden");
+  const books = [...inquirySnapshots.values()].sort(
+    (a, b) => a.display_index - b.display_index
+  );
+  if (books.length === 0) {
+    if (errEl) {
+      errEl.textContent = "No books selected.";
+      errEl.classList.remove("hidden");
+    }
+    return;
+  }
+  if (!window.LibrarySync?.submitBookInquiry) {
+    if (errEl) {
+      errEl.textContent = "Sending requests is not available.";
+      errEl.classList.remove("hidden");
+    }
+    return;
+  }
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await window.LibrarySync.submitBookInquiry({ name, email, message, books });
+    okEl?.classList.remove("hidden");
+    form.reset();
+    inquirySelectedKeys.clear();
+    inquirySnapshots.clear();
+    syncInquiryStickyBar();
+    for (const cb of document.querySelectorAll(".card-inquiry-cb")) {
+      cb.checked = false;
+    }
+    setTimeout(() => {
+      closeInquiryModal();
+      if (submitBtn) submitBtn.disabled = false;
+    }, 1600);
+  } catch (er) {
+    console.error(er);
+    if (errEl) {
+      errEl.textContent =
+        er instanceof Error
+          ? er.message
+          : "Could not send. Check your connection or try again later.";
+      errEl.classList.remove("hidden");
+    }
+    if (submitBtn) submitBtn.disabled = false;
+  }
+});
 
 refresh().catch(showGalleryInitError);

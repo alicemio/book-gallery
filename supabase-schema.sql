@@ -81,3 +81,22 @@ alter table public.library_uploads
 
 alter table public.library_uploads
   add column if not exists source_upload_id uuid;
+
+-- Visitor book requests (multi-select from gallery; review in Supabase Table Editor).
+create table if not exists public.book_inquiries (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  requester_name text not null,
+  requester_email text not null,
+  message text not null default '',
+  books jsonb not null default '[]'::jsonb
+);
+
+alter table public.book_inquiries enable row level security;
+
+drop policy if exists "book_inquiries_insert_anon" on public.book_inquiries;
+
+create policy "book_inquiries_insert_anon" on public.book_inquiries
+  for insert with check (true);
+
+-- No SELECT/UPDATE/DELETE for anonymous clients; use the dashboard (service role) to read.

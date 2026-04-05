@@ -18,7 +18,9 @@
         <h1>Prof. Lewis Cook's Online Library</h1>
         <p class="tagline">
           Label each image by adding a category and adding notes on its card. Click a
-          thumbnail to open it and zoom in.
+          thumbnail to open it and zoom in. Use <strong>Request</strong> on each card to
+          build a list, then <strong>Add to inquiry list</strong> to send your name, email,
+          and which books you are interested in.
         </p>
         <p id="sync-hint" class="sync-hint" hidden></p>
       </div>
@@ -77,6 +79,22 @@
               disabled
             >
               No removed photos
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="inquiry-sticky" class="inquiry-sticky" hidden aria-label="Book inquiry list">
+        <div class="inquiry-sticky-inner">
+          <p class="inquiry-sticky-text">
+            <strong class="inquiry-sticky-count">0</strong>
+            <span class="inquiry-sticky-label"> book(s) selected</span>
+          </p>
+          <div class="inquiry-sticky-actions">
+            <button type="button" id="inquiry-clear-btn" class="inquiry-btn inquiry-btn-muted">
+              Clear
+            </button>
+            <button type="button" id="inquiry-open-form-btn" class="inquiry-btn inquiry-btn-primary">
+              Add to inquiry list
             </button>
           </div>
         </div>
@@ -163,6 +181,62 @@
     </div>
 
     <datalist id="gallery-category-datalist"></datalist>
+
+    <div
+      id="inquiry-modal"
+      class="inquiry-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inquiry-modal-title"
+      hidden
+    >
+      <div class="inquiry-modal-backdrop" id="inquiry-modal-backdrop"></div>
+      <div class="inquiry-modal-panel">
+        <button type="button" class="inquiry-modal-close" id="inquiry-modal-close" aria-label="Close">
+          &times;
+        </button>
+        <h2 id="inquiry-modal-title" class="inquiry-modal-title">Request books</h2>
+        <p id="inquiry-modal-offline" class="inquiry-modal-offline hidden">
+          Online requests are not available on this copy of the site (library connection missing).
+        </p>
+        <ol id="inquiry-modal-summary" class="inquiry-modal-summary"></ol>
+        <form id="inquiry-form" class="inquiry-form">
+          <input
+            type="text"
+            name="website"
+            class="inquiry-honeypot"
+            tabindex="-1"
+            autocomplete="off"
+            aria-hidden="true"
+          />
+          <label class="inquiry-field">
+            <span class="inquiry-field-label">Name</span>
+            <input type="text" name="requester_name" required autocomplete="name" class="inquiry-input" />
+          </label>
+          <label class="inquiry-field">
+            <span class="inquiry-field-label">Email</span>
+            <input
+              type="email"
+              name="requester_email"
+              required
+              autocomplete="email"
+              class="inquiry-input"
+            />
+          </label>
+          <label class="inquiry-field">
+            <span class="inquiry-field-label">Message <span class="inquiry-optional">(optional)</span></span>
+            <textarea name="message" rows="3" class="inquiry-input"></textarea>
+          </label>
+          <p id="inquiry-form-error" class="inquiry-form-error hidden" role="alert"></p>
+          <button type="submit" class="inquiry-btn inquiry-btn-primary inquiry-submit" id="inquiry-submit-btn">
+            Send request
+          </button>
+        </form>
+        <p id="inquiry-form-success" class="inquiry-form-success hidden" role="status">
+          Thank you—we received your request.
+        </p>
+      </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js"></script>
     <script src="supabase-config.js"></script>

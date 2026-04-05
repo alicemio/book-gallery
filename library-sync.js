@@ -145,6 +145,22 @@ const LibrarySync = (() => {
         )
         .subscribe();
     },
+
+    /**
+     * Insert a visitor request; requires `book_inquiries` table and INSERT policy (see supabase-schema.sql).
+     * @param {{ name: string, email: string, message: string, books: unknown }} payload
+     */
+    async submitBookInquiry(payload) {
+      const sb = getClient();
+      if (!sb) throw new Error("Library not connected");
+      const { error } = await sb.from("book_inquiries").insert({
+        requester_name: payload.name.trim(),
+        requester_email: payload.email.trim(),
+        message: (payload.message || "").trim(),
+        books: payload.books,
+      });
+      if (error) throw error;
+    },
   };
 })();
 
