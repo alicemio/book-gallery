@@ -1393,7 +1393,21 @@ function buildCategoryFieldMultiStatic(itemKey) {
       persist();
     }
     input.value = "";
+    addBtn.classList.remove("category-add-btn-typing");
   }
+
+  function syncAddBtnTypingHighlight() {
+    addBtn.classList.toggle(
+      "category-add-btn-typing",
+      input.value.trim().length > 0
+    );
+  }
+
+  input.addEventListener("input", syncAddBtnTypingHighlight);
+  input.addEventListener("focus", syncAddBtnTypingHighlight);
+  input.addEventListener("blur", () =>
+    addBtn.classList.remove("category-add-btn-typing")
+  );
 
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -1492,7 +1506,21 @@ function buildCategoryFieldMultiIdb(row) {
       persistIdb();
     }
     input.value = "";
+    addBtn.classList.remove("category-add-btn-typing");
   }
+
+  function syncAddBtnTypingHighlight() {
+    addBtn.classList.toggle(
+      "category-add-btn-typing",
+      input.value.trim().length > 0
+    );
+  }
+
+  input.addEventListener("input", syncAddBtnTypingHighlight);
+  input.addEventListener("focus", syncAddBtnTypingHighlight);
+  input.addEventListener("blur", () =>
+    addBtn.classList.remove("category-add-btn-typing")
+  );
 
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
