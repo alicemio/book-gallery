@@ -8,7 +8,7 @@ const LS_CAPTION_PREFIX = "book-gallery-caption:";
 const LS_CATEGORY_BY_ITEM = "book-gallery-category-by-item";
 const LS_HIDDEN_STATIC = "book-gallery-hidden-static";
 const CATEGORY_DATALIST_ID = "gallery-category-datalist";
-/** Order of gallery card keys (`s:…` / `i:…`); includes manual placement, e.g. crops after their source. */
+/** Order of gallery card keys (`s:…`, `u:<uuid>` synced uploads, `i:<n>` local-only); localStorage only — cloud uses canonical order. */
 const LS_ITEM_ORDER = "book-gallery-item-order";
 /** Per static `images/…` path: last local edit or last merged remote `updated_at` (ms), for LWW merge. */
 const LS_STATIC_LWW_MS = "book-gallery-static-lww-ms";
@@ -261,11 +261,15 @@ document.getElementById("lightbox-save-crop")?.addEventListener("click", async (
         );
       }
       const sourceMeta = await sourceMetaForLightboxKey(afterKey);
+      const ts =
+        remoteId && configured ? new Date().toISOString() : undefined;
       const newId = await addPhotoFromBlob(blob, "", {
         ...sourceMeta,
-        ...(remoteId ? { remoteId } : {}),
+        ...(remoteId ? { remoteId, remoteUpdatedAt: ts } : {}),
       });
-      await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
+      if (!configured) {
+        await insertGalleryOrderAfterSource(afterKey, itemKeyIdb(newId));
+      }
       if (remoteId) {
         try {
           await syncNewLocalUploadToCloud(newId, remoteId);
@@ -318,7 +322,7 @@ let activeFilter = { type: "all" };
 /** Snapshot of gallery items for filtering (same order as cards in DOM). */
 let lastItems = [];
 
-/** Multi-book visitor inquiry: card keys `s:…` / `i:…` and payload rows for Supabase. */
+/** Multi-book visitor inquiry: card keys `s:…`, `u:…`, `i:…` and payload rows for Supabase. */
 const inquirySelectedKeys = new Set();
 /** @type {Map<string, { item_key: string, display_index: number, kind: string, label: string, image_path: string | null, upload_id: string | null }>} */
 const inquirySnapshots = new Map();
@@ -460,6 +464,120 @@ function itemKeyStatic(path) {
 
 function itemKeyIdb(id) {
   return `i:${id}`;
+}
+
+/** Stable card key for IndexedDB rows: synced uploads use Supabase id so order matches every device. */
+function itemKeyForIdbRow(row) {
+  if (row?.remoteId) return `u:${row.remoteId}`;
+  return itemKeyIdb(row.id);
+}
+
+/** Sort uploads for canonical order (ISO `remoteUpdatedAt`, then uuid, then local id). */
+function idbOrderKey(row) {
+  const t =
+    typeof row.remoteUpdatedAt === "string" && row.remoteUpdatedAt.trim()
+      ? row.remoteUpdatedAt.trim()
+      : "";
+  if (t) return t;
+  if (row.remoteId) return String(row.remoteId);
+  return `local:${String(row.id).padStart(9, "0")}`;
+}
+
+/**
+ * @param {{ source_static_path?: string | null, source_upload_id?: string | null }} row
+ */
+function afterKeyFromUploadRowFields(row) {
+  const sp = row.source_static_path;
+  if (sp != null && String(sp).trim()) {
+    return itemKeyStatic(String(sp).trim());
+  }
+  const su = row.source_upload_id;
+  if (su != null && String(su).trim()) {
+    return `u:${String(su).trim()}`;
+  }
+  return null;
+}
+
+function buildCanonicalOrderedKeys(idbRows) {
+  const sortedStatic = visibleSortedStaticPaths();
+  let list = sortedStatic.map(itemKeyStatic);
+  const withRemote = idbRows.filter((r) => r.remoteId);
+  const localOnly = idbRows.filter((r) => !r.remoteId);
+  function cmpUploads(a, b) {
+    const c = idbOrderKey(a).localeCompare(idbOrderKey(b));
+    if (c !== 0) return c;
+    const ar = a.remoteId ? String(a.remoteId) : String(a.id);
+    const br = b.remoteId ? String(b.remoteId) : String(b.id);
+    return ar.localeCompare(br);
+  }
+  withRemote.sort(cmpUploads);
+  localOnly.sort((a, b) => a.id - b.id);
+  for (const row of [...withRemote, ...localOnly]) {
+    const self = itemKeyForIdbRow(row);
+    list = list.filter((k) => k !== self);
+    const afterKey = afterKeyFromUploadRowFields(row);
+    if (afterKey && list.includes(afterKey)) {
+      const idx = list.indexOf(afterKey);
+      list.splice(idx + 1, 0, self);
+    } else {
+      list.push(self);
+    }
+  }
+  return list;
+}
+
+/** Copy category + inquiry keys from `i:<id>` to `u:<uuid>` after sync. */
+function migrateStableItemKeys(idbRows) {
+  if (!window.LibrarySync?.isConfigured?.()) return;
+  const m = loadCategoryMap();
+  let catChanged = false;
+  for (const row of idbRows) {
+    if (!row.remoteId) continue;
+    const oldK = itemKeyIdb(row.id);
+    const newK = itemKeyForIdbRow(row);
+    if (oldK === newK) continue;
+    if (m[oldK] != null && m[newK] == null) {
+      m[newK] = m[oldK];
+      delete m[oldK];
+      catChanged = true;
+    } else if (m[oldK] != null && m[newK] != null) {
+      delete m[oldK];
+      catChanged = true;
+    }
+  }
+  if (catChanged) saveCategoryMap(m);
+
+  const saved = loadItemOrder();
+  if (saved?.length) {
+    const byOld = new Map(idbRows.map((r) => [itemKeyIdb(r.id), r]));
+    let ordChanged = false;
+    const repl = saved.map((k) => {
+      if (k.startsWith("u:")) return k;
+      const row = byOld.get(k);
+      if (row?.remoteId) {
+        ordChanged = true;
+        return itemKeyForIdbRow(row);
+      }
+      return k;
+    });
+    if (ordChanged) saveItemOrder(repl);
+  }
+
+  const byOld = new Map(idbRows.map((r) => [itemKeyIdb(r.id), r]));
+  for (const key of [...inquirySelectedKeys]) {
+    if (!key.startsWith("i:")) continue;
+    const row = byOld.get(key);
+    if (!row?.remoteId) continue;
+    const nk = itemKeyForIdbRow(row);
+    inquirySelectedKeys.delete(key);
+    inquirySelectedKeys.add(nk);
+    const snap = inquirySnapshots.get(key);
+    if (snap) {
+      inquirySnapshots.delete(key);
+      snap.item_key = nk;
+      inquirySnapshots.set(nk, snap);
+    }
+  }
 }
 
 function loadCategoryMap() {
@@ -769,10 +887,14 @@ function mergeOrderKeys(defaultKeys, savedKeys) {
 
 function buildDefaultOrderedKeys(idbRows) {
   const sortedStatic = visibleSortedStaticPaths();
-  const sortedIdb = [...idbRows].sort((a, b) => b.id - a.id);
+  const sortedIdb = [...idbRows].sort((a, b) => {
+    const c = idbOrderKey(a).localeCompare(idbOrderKey(b));
+    if (c !== 0) return c;
+    return b.id - a.id;
+  });
   const keys = [];
   for (const path of sortedStatic) keys.push(itemKeyStatic(path));
-  for (const row of sortedIdb) keys.push(itemKeyIdb(row.id));
+  for (const row of sortedIdb) keys.push(itemKeyForIdbRow(row));
   return keys;
 }
 
@@ -785,7 +907,7 @@ function buildItemsMap(idbRows) {
     map.set(key, { kind: "static", path, key });
   }
   for (const row of idbRows) {
-    const key = itemKeyIdb(row.id);
+    const key = itemKeyForIdbRow(row);
     map.set(key, { kind: "idb", row, key });
   }
   return map;
@@ -870,8 +992,8 @@ function getAllPhotos(store) {
 
 /**
  * Place a new idb card key immediately after `afterKey` in the persisted gallery order.
- * @param {string | null} afterKey `s:…` or `i:…`, or null to append
- * @param {string} newKey e.g. `i:42`
+ * @param {string | null} afterKey `s:…`, `u:…`, or `i:…`, or null to append
+ * @param {string} newKey e.g. `i:42` (offline-only; cloud order is canonical)
  */
 async function insertGalleryOrderAfterSource(afterKey, newKey) {
   const rows = await withStore("readonly", getAllPhotos);
@@ -899,6 +1021,12 @@ async function sourceMetaForLightboxKey(itemKey) {
   if (itemKey.startsWith("s:")) {
     return { source_static_path: itemKey.slice(2), source_upload_id: null };
   }
+  if (itemKey.startsWith("u:")) {
+    const rid = itemKey.slice(2).trim();
+    if (rid) {
+      return { source_static_path: null, source_upload_id: rid };
+    }
+  }
   if (itemKey.startsWith("i:")) {
     const id = Number(itemKey.slice(2));
     if (!Number.isFinite(id)) {
@@ -910,20 +1038,6 @@ async function sourceMetaForLightboxKey(itemKey) {
     }
   }
   return { source_static_path: null, source_upload_id: null };
-}
-
-/** @param {object} row — Supabase library_uploads row */
-function afterKeyFromRemoteUploadRow(row, byRemote) {
-  const sp = row.source_static_path;
-  if (sp != null && String(sp).trim()) {
-    return itemKeyStatic(String(sp).trim());
-  }
-  const su = row.source_upload_id;
-  if (su != null && String(su).trim()) {
-    const parent = byRemote.get(String(su));
-    if (parent && parent.id != null) return itemKeyIdb(parent.id);
-  }
-  return null;
 }
 
 function updateCaption(store, id, caption) {
@@ -958,6 +1072,9 @@ function updateIdbUploadFields(store, id, fields, opts = {}) {
       }
       if ("caption" in fields) row.caption = fields.caption;
       if ("category" in fields) row.category = fields.category;
+      if ("remoteUpdatedAt" in fields && fields.remoteUpdatedAt != null) {
+        row.remoteUpdatedAt = String(fields.remoteUpdatedAt);
+      }
       const putReq = store.put(row);
       putReq.onsuccess = () => {
         if (!opts.skipRemote) {
@@ -1075,15 +1192,31 @@ async function mergeRemoteUploadRows(remoteList) {
     const cat = u.category != null ? String(u.category).trim() : "";
     const cap = u.caption != null ? String(u.caption) : "";
     if (existing) {
-      const prevCap = existing.caption ?? "";
+      const fullRow = await withStore("readonly", (s) =>
+        getPhotoById(s, existing.id)
+      );
+      const prevCap = fullRow?.caption ?? "";
       const prevCat =
-        typeof existing.category === "string" ? existing.category : "";
-      if (prevCap !== cap || prevCat !== cat) {
+        typeof fullRow?.category === "string" ? fullRow.category : "";
+      const prevTs = fullRow?.remoteUpdatedAt ?? "";
+      const remoteTs =
+        u.updated_at != null && u.updated_at !== ""
+          ? String(u.updated_at)
+          : "";
+      if (
+        prevCap !== cap ||
+        prevCat !== cat ||
+        (remoteTs && remoteTs !== prevTs)
+      ) {
         await withStore("readwrite", (s) =>
           updateIdbUploadFields(
             s,
             existing.id,
-            { caption: cap, category: cat },
+            {
+              caption: cap,
+              category: cat,
+              ...(remoteTs ? { remoteUpdatedAt: remoteTs } : {}),
+            },
             { skipRemote: true }
           )
         );
@@ -1110,6 +1243,10 @@ async function mergeRemoteUploadRows(remoteList) {
         storage_path: storagePath,
         source_static_path: u.source_static_path ?? null,
         source_upload_id: u.source_upload_id ?? null,
+        remoteUpdatedAt:
+          u.updated_at != null && u.updated_at !== ""
+            ? String(u.updated_at)
+            : new Date().toISOString(),
       });
       byRemote.set(String(rid), {
         id: newId,
@@ -1117,13 +1254,6 @@ async function mergeRemoteUploadRows(remoteList) {
         caption: cap,
         category: cat,
       });
-      const placementAfter = afterKeyFromRemoteUploadRow(u, byRemote);
-      if (placementAfter) {
-        await insertGalleryOrderAfterSource(
-          placementAfter,
-          itemKeyIdb(newId)
-        );
-      }
     }
   }
 }
@@ -1538,7 +1668,7 @@ function buildCategoryFieldMultiStatic(itemKey) {
 }
 
 function buildCategoryFieldMultiIdb(row) {
-  const key = itemKeyIdb(row.id);
+  const key = itemKeyForIdbRow(row);
   const wrap = document.createElement("div");
   wrap.className = "card-category-wrap";
 
@@ -1848,7 +1978,7 @@ function renderStaticCard(path, displayIndex) {
 }
 
 function renderIdbCard(row, displayIndex) {
-  const key = itemKeyIdb(row.id);
+  const key = itemKeyForIdbRow(row);
   const li = document.createElement("li");
   li.className = "card";
   li.dataset.itemKey = key;
@@ -1967,10 +2097,11 @@ function renderIdbCard(row, displayIndex) {
 }
 
 function buildItems(idbRows) {
-  const defaultKeys = buildDefaultOrderedKeys(idbRows);
-  const saved = loadItemOrder();
-  const orderedKeys = mergeOrderKeys(defaultKeys, saved);
+  migrateStableItemKeys(idbRows);
   const byKey = buildItemsMap(idbRows);
+  const orderedKeys = window.LibrarySync?.isConfigured?.()
+    ? buildCanonicalOrderedKeys(idbRows)
+    : mergeOrderKeys(buildDefaultOrderedKeys(idbRows), loadItemOrder());
   /** @type {{ kind: 'static', path: string, key: string } | { kind: 'idb', row: object, key: string }} */
   const items = [];
   for (const k of orderedKeys) {
