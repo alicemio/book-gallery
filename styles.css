@@ -427,17 +427,13 @@ main {
   aspect-ratio: 3 / 4;
   background: #ebe8e2;
   cursor: pointer;
+  border-radius: var(--radius) var(--radius) 0 0;
+  overflow: hidden;
 }
 
-/* Inquiry “Request” — border layered above the photo (set via `card--inquiry-selected` in app.js). */
-.card--inquiry-selected .card-thumb-wrap::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 2px solid #166534;
-  pointer-events: none;
-  z-index: 2;
-  box-sizing: border-box;
+/* Inquiry “Request” — inset ring on the image so it lines up with the photo (not a separate tall box). */
+.card--inquiry-selected .card-thumb {
+  box-shadow: inset 0 0 0 2px #166534;
 }
 
 .card-thumb {
