@@ -101,9 +101,7 @@ create policy "gallery_prefs_insert" on public.library_gallery_prefs
 create policy "gallery_prefs_update" on public.library_gallery_prefs
   for update using (id = 1) with check (id = 1);
 
-insert into public.library_gallery_prefs (id, hidden_static_paths)
-values (1, '{}')
-on conflict (id) do nothing;
+-- Row id=1 is created by the site’s first upsert (avoids empty `{}` wiping local removals).
 
 -- Optional: Database → Replication → Realtime for public.library_gallery_prefs
 

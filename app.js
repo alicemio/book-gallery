@@ -975,6 +975,13 @@ async function pullAndMergeGalleryPrefsFromCloud() {
   const paths = Array.isArray(data.hidden_static_paths)
     ? data.hidden_static_paths
     : [];
+  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+  // SQL bootstrap row is often `{}` — don’t treat that as “user restored everything”
+  // while this browser still has local removals; seed from local instead.
+  if (paths.length === 0 && local.length > 0) {
+    await seedHiddenPrefsToCloudIfNoRow();
+    return;
+  }
   applyRemoteHiddenPaths(paths);
 }
 
