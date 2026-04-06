@@ -968,21 +968,31 @@ function applyRemoteHiddenPaths(paths) {
 
 async function pullAndMergeGalleryPrefsFromCloud() {
   const data = await window.LibrarySync.pullGalleryPrefs();
+  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
   if (data == null) {
     await seedHiddenPrefsToCloudIfNoRow();
     return;
   }
-  const paths = Array.isArray(data.hidden_static_paths)
-    ? data.hidden_static_paths
-    : [];
-  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
-  // SQL bootstrap row is often `{}` — don’t treat that as “user restored everything”
-  // while this browser still has local removals; seed from local instead.
-  if (paths.length === 0 && local.length > 0) {
+  const serverPaths = (
+    Array.isArray(data.hidden_static_paths) ? data.hidden_static_paths : []
+  ).filter(shouldCloudSyncPath);
+  // Empty server + local removals: upload local (bootstrap row was {}).
+  if (serverPaths.length === 0 && local.length > 0) {
     await seedHiddenPrefsToCloudIfNoRow();
     return;
   }
-  applyRemoteHiddenPaths(paths);
+  // Union: refresh runs right after Remove before debounced push; without this, pull
+  // would overwrite the row you just hid with a stale server list and the card pops back.
+  const merged = [...new Set([...serverPaths, ...local])];
+  applyRemoteHiddenPaths(merged);
+  const a = [...serverPaths].sort().join("\0");
+  const b = [...merged].sort().join("\0");
+  if (a !== b) {
+    const r = await window.LibrarySync.pushGalleryPrefs(merged);
+    if (r?.error) {
+      console.warn("book-gallery: push merged gallery prefs", r.error);
+    }
+  }
 }
 
 /** First device after migration: upload local hidden list so others can pull it. */
@@ -2144,7 +2154,7 @@ function renderStaticCard(path, displayIndex) {
   remove.type = "button";
   remove.className = "remove-btn";
   remove.textContent = "Remove from gallery";
-  remove.addEventListener("click", () => {
+  remove.addEventListener("click", async () => {
     const fn = fileNameFromPath(path);
     if (
       !confirm(
@@ -2154,7 +2164,12 @@ function renderStaticCard(path, displayIndex) {
       return;
     }
     hideStaticPath(path);
-    refresh().catch(console.error);
+    try {
+      await flushHiddenPrefsToCloud();
+      await refresh();
+    } catch (e) {
+      console.error(e);
+    }
   });
   actions.appendChild(remove);
   body.appendChild(actions);
