@@ -429,10 +429,15 @@ main {
   cursor: pointer;
 }
 
-/* Inquiry “Request” checked — frame the thumbnail (on the img so it isn’t covered). */
-.card:has(.card-inquiry-cb:checked) .card-thumb {
-  outline: 2px solid #166534;
-  outline-offset: -2px;
+/* Inquiry “Request” — border layered above the photo (set via `card--inquiry-selected` in app.js). */
+.card--inquiry-selected .card-thumb-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid #166534;
+  pointer-events: none;
+  z-index: 2;
+  box-sizing: border-box;
 }
 
 .card-thumb {

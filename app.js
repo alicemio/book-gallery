@@ -1243,6 +1243,7 @@ function buildInquirySelectRow(itemKey, displayIndex, kind, labelText, extra) {
   cb.checked = inquirySelectedKeys.has(itemKey);
   cb.addEventListener("click", (e) => e.stopPropagation());
   cb.addEventListener("change", () => {
+    const card = cb.closest(".card");
     if (cb.checked) {
       inquirySelectedKeys.add(itemKey);
       inquirySnapshots.set(itemKey, {
@@ -1253,9 +1254,11 @@ function buildInquirySelectRow(itemKey, displayIndex, kind, labelText, extra) {
         image_path: extra.image_path ?? null,
         upload_id: extra.upload_id ?? null,
       });
+      card?.classList.add("card--inquiry-selected");
     } else {
       inquirySelectedKeys.delete(itemKey);
       inquirySnapshots.delete(itemKey);
+      card?.classList.remove("card--inquiry-selected");
     }
     syncInquiryStickyBar();
   });
@@ -1735,6 +1738,7 @@ function renderStaticCard(path, displayIndex) {
         upload_id: null,
       })
     );
+    if (inquirySelectedKeys.has(key)) li.classList.add("card--inquiry-selected");
   }
 
   body.appendChild(buildCategoryFieldMultiStatic(key));
@@ -1835,6 +1839,7 @@ function renderIdbCard(row, displayIndex) {
         }
       )
     );
+    if (inquirySelectedKeys.has(key)) li.classList.add("card--inquiry-selected");
   }
 
   body.appendChild(buildCategoryFieldMultiIdb(row));
@@ -2114,6 +2119,9 @@ document.getElementById("inquiry-clear-btn")?.addEventListener("click", () => {
   for (const cb of document.querySelectorAll(".card-inquiry-cb")) {
     cb.checked = false;
   }
+  document.querySelectorAll(".card--inquiry-selected").forEach((el) => {
+    el.classList.remove("card--inquiry-selected");
+  });
 });
 document.getElementById("inquiry-modal-close")?.addEventListener("click", closeInquiryModal);
 document.getElementById("inquiry-modal-backdrop")?.addEventListener("click", closeInquiryModal);
@@ -2160,6 +2168,9 @@ document.getElementById("inquiry-form")?.addEventListener("submit", async (e) =>
     for (const cb of document.querySelectorAll(".card-inquiry-cb")) {
       cb.checked = false;
     }
+    document.querySelectorAll(".card--inquiry-selected").forEach((el) => {
+      el.classList.remove("card--inquiry-selected");
+    });
     closeInquiryModal();
     if (submitBtn) submitBtn.disabled = false;
     openInquirySuccessModal();
