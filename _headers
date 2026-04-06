@@ -1,0 +1,15 @@
+# Avoid stale supabase-config / JS on phones (often the cause of “works on desktop, not mobile”).
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/supabase-config.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/app.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/library-sync.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/images-manifest.js
+  Cache-Control: public, max-age=0, must-revalidate

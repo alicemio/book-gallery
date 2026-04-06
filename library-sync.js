@@ -134,7 +134,11 @@ const LibrarySync = (() => {
       if (stErr) console.error("LibrarySync.deleteUpload storage", stErr);
     },
 
-    subscribe(onChange) {
+    /**
+     * @param {() => void} onChange
+     * @param {(status: string, err?: unknown) => void} [onChannelStatus] — e.g. CHANNEL_ERROR / TIMED_OUT on mobile
+     */
+    subscribe(onChange, onChannelStatus) {
       const sb = getClient();
       if (!sb || typeof onChange !== "function") return;
       if (channel) {
@@ -153,7 +157,9 @@ const LibrarySync = (() => {
           { event: "*", schema: "public", table: "library_uploads" },
           () => onChange()
         )
-        .subscribe();
+        .subscribe((status, err) => {
+          if (typeof onChannelStatus === "function") onChannelStatus(status, err);
+        });
     },
 
     /**

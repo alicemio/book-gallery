@@ -441,21 +441,60 @@ function updateSyncHint() {
   const el = document.getElementById("sync-hint");
   if (!el) return;
   if (!window.LibrarySync?.isConfigured?.()) {
-    el.textContent = "";
-    el.hidden = true;
-    el.classList.remove("sync-hint-warn");
+    const onDeployedHttps =
+      typeof location !== "undefined" &&
+      location.protocol === "https:" &&
+      location.hostname !== "localhost" &&
+      location.hostname !== "127.0.0.1";
+    if (onDeployedHttps) {
+      el.textContent =
+        "Shared library isn’t connected on this device (missing Supabase URL/key in this build, or the script was cached). This phone won’t load others’ edits until that works—try a hard refresh or your site’s latest deploy.";
+      el.hidden = false;
+      el.classList.add("sync-hint-warn");
+    } else {
+      el.textContent = "";
+      el.hidden = true;
+      el.classList.remove("sync-hint-warn");
+    }
     return;
   }
   el.hidden = false;
   if (lastLibrarySyncError) {
-    el.textContent =
-      "Could not load the shared library (check Supabase URL, anon key, and SQL). Edits stay on this device until it works.";
+    const msg =
+      lastLibrarySyncError instanceof Error
+        ? lastLibrarySyncError.message
+        : String(lastLibrarySyncError);
+    el.textContent = `Could not load the shared library. ${msg.slice(0, 200)}${
+      msg.length > 200 ? "…" : ""
+    } Try Wi‑Fi, disable content blockers for this site, hard refresh, then check Supabase + SQL.`;
     el.classList.add("sync-hint-warn");
   } else {
     el.textContent = "";
     el.hidden = true;
     el.classList.remove("sync-hint-warn");
   }
+}
+
+/** Retries help flaky mobile / captive-portal networks. */
+async function pullLibraryFromCloud() {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const remoteRows = await window.LibrarySync.pull();
+      mergeRemoteLibraryRows(remoteRows);
+      const uploadRows = await window.LibrarySync.pullUploads();
+      await mergeRemoteUploadRows(uploadRows);
+      return true;
+    } catch (e) {
+      lastErr = e;
+      console.warn("book-gallery: cloud pull attempt failed", attempt, e);
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 450 * attempt));
+      }
+    }
+  }
+  if (lastErr) lastLibrarySyncError = lastErr;
+  return false;
 }
 
 function itemKeyStatic(path) {
@@ -2246,21 +2285,12 @@ async function refresh() {
   lastLibrarySyncError = null;
   let libraryPullOk = false;
   if (window.LibrarySync?.isConfigured?.()) {
-    try {
-      if (!window.LibrarySync.hasClient()) {
-        lastLibrarySyncError = new Error(
-          "Supabase client unavailable (check the CDN script and config keys)."
-        );
-      } else {
-        const remoteRows = await window.LibrarySync.pull();
-        mergeRemoteLibraryRows(remoteRows);
-        const uploadRows = await window.LibrarySync.pullUploads();
-        await mergeRemoteUploadRows(uploadRows);
-        libraryPullOk = true;
-      }
-    } catch (e) {
-      console.error(e);
-      lastLibrarySyncError = e;
+    if (!window.LibrarySync.hasClient()) {
+      lastLibrarySyncError = new Error(
+        "Supabase client unavailable (blocked CDN script or offline—check devtools / network)."
+      );
+    } else {
+      libraryPullOk = await pullLibraryFromCloud();
     }
   }
   updateSyncHint();
@@ -2275,12 +2305,23 @@ async function refresh() {
   ) {
     librarySyncSubscribed = true;
     let debounceRemote;
-    window.LibrarySync.subscribe(() => {
-      clearTimeout(debounceRemote);
-      debounceRemote = setTimeout(() => {
-        refresh().catch(console.error);
-      }, 450);
-    });
+    window.LibrarySync.subscribe(
+      () => {
+        clearTimeout(debounceRemote);
+        debounceRemote = setTimeout(() => {
+          refresh().catch(console.error);
+        }, 450);
+      },
+      (status) => {
+        if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          librarySyncSubscribed = false;
+        }
+      }
+    );
   }
 }
 
@@ -2292,6 +2333,18 @@ document.addEventListener("visibilitychange", () => {
     refresh().catch(console.error);
   }, 600);
 });
+
+/* iOS often drops Realtime when backgrounded; periodic pull keeps mobile roughly in sync. */
+setInterval(() => {
+  if (document.hidden) return;
+  if (
+    !window.LibrarySync?.isConfigured?.() ||
+    !window.LibrarySync.hasClient?.()
+  ) {
+    return;
+  }
+  refresh().catch(console.error);
+}, 120_000);
 
 function applyBodyScrollLock() {
   document.body.style.overflow = lightbox.hidden ? "" : "hidden";
