@@ -134,6 +134,46 @@ const LibrarySync = (() => {
       if (stErr) console.error("LibrarySync.deleteUpload storage", stErr);
     },
 
+    /** @returns {Promise<{ hidden_static_paths?: string[], updated_at?: string } | null>} */
+    async pullGalleryPrefs() {
+      const sb = getClient();
+      if (!sb) return null;
+      const { data, error } = await sb
+        .from("library_gallery_prefs")
+        .select("hidden_static_paths,updated_at")
+        .eq("id", 1)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+
+    /** @param {string[]} paths manifest paths `images/…` currently hidden */
+    async pushGalleryPrefs(paths) {
+      const sb = getClient();
+      if (!sb) return { error: new Error("Supabase client unavailable") };
+      const unique = [
+        ...new Set(
+          (paths || [])
+            .filter((p) => typeof p === "string")
+            .map((p) => p.trim())
+            .filter(Boolean)
+        ),
+      ];
+      const { error } = await sb.from("library_gallery_prefs").upsert(
+        {
+          id: 1,
+          hidden_static_paths: unique,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+      if (error) {
+        console.error("LibrarySync.pushGalleryPrefs", error);
+        return { error: new Error(error.message || String(error)) };
+      }
+      return { error: null };
+    },
+
     /**
      * @param {() => void} onChange
      * @param {(status: string, err?: unknown) => void} [onChannelStatus] — e.g. CHANNEL_ERROR / TIMED_OUT on mobile
@@ -155,6 +195,11 @@ const LibrarySync = (() => {
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "library_uploads" },
+          () => onChange()
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "library_gallery_prefs" },
           () => onChange()
         )
         .subscribe((status, err) => {

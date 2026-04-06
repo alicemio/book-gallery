@@ -939,6 +939,7 @@ function hideStaticPath(path) {
   delete m[key];
   saveCategoryMap(m);
   localStorage.removeItem(staticCaptionKey(path));
+  queuePushHiddenPrefsToCloud();
 }
 
 function unhideAllStatic() {
@@ -947,6 +948,77 @@ function unhideAllStatic() {
   mirrorHiddenStaticToIdb(hiddenStaticMerged).catch((e) =>
     console.warn("book-gallery: clear hidden mirror", e)
   );
+}
+
+/** Apply server hidden list so “Remove” counts match on phone and desktop. */
+function applyRemoteHiddenPaths(paths) {
+  const next = new Set(paths.filter((p) => shouldCloudSyncPath(p)));
+  const prev = new Set([...hiddenStaticMerged]);
+  for (const p of next) {
+    if (!prev.has(p)) {
+      const key = itemKeyStatic(p);
+      const m = loadCategoryMap();
+      delete m[key];
+      saveCategoryMap(m);
+      localStorage.removeItem(staticCaptionKey(p));
+    }
+  }
+  saveHiddenStatic(next);
+}
+
+async function pullAndMergeGalleryPrefsFromCloud() {
+  const data = await window.LibrarySync.pullGalleryPrefs();
+  if (data == null) {
+    await seedHiddenPrefsToCloudIfNoRow();
+    return;
+  }
+  const paths = Array.isArray(data.hidden_static_paths)
+    ? data.hidden_static_paths
+    : [];
+  applyRemoteHiddenPaths(paths);
+}
+
+/** First device after migration: upload local hidden list so others can pull it. */
+async function seedHiddenPrefsToCloudIfNoRow() {
+  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+  if (local.length === 0) return;
+  const r = await window.LibrarySync.pushGalleryPrefs(local);
+  if (r?.error) throw r.error;
+}
+
+let hiddenPrefsSyncTimer = null;
+
+function queuePushHiddenPrefsToCloud() {
+  if (
+    !window.LibrarySync?.pushGalleryPrefs ||
+    !window.LibrarySync.isConfigured() ||
+    !window.LibrarySync.hasClient()
+  ) {
+    return;
+  }
+  clearTimeout(hiddenPrefsSyncTimer);
+  hiddenPrefsSyncTimer = setTimeout(() => {
+    hiddenPrefsSyncTimer = null;
+    const paths = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+    window.LibrarySync.pushGalleryPrefs(paths).catch((e) =>
+      console.warn("book-gallery: push gallery prefs", e)
+    );
+  }, 550);
+}
+
+async function flushHiddenPrefsToCloud() {
+  if (
+    !window.LibrarySync?.pushGalleryPrefs ||
+    !window.LibrarySync.isConfigured() ||
+    !window.LibrarySync.hasClient()
+  ) {
+    return;
+  }
+  clearTimeout(hiddenPrefsSyncTimer);
+  hiddenPrefsSyncTimer = null;
+  const paths = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+  const r = await window.LibrarySync.pushGalleryPrefs(paths);
+  if (r?.error) console.warn("book-gallery: flush gallery prefs", r.error);
 }
 
 function visibleSortedStaticPaths() {
@@ -2281,7 +2353,16 @@ function renderGallery(idbRows) {
 }
 
 async function refresh() {
-  await mergeHiddenStaticFromIdb();
+  if (window.LibrarySync?.isConfigured?.() && window.LibrarySync.hasClient()) {
+    try {
+      await pullAndMergeGalleryPrefsFromCloud();
+    } catch (e) {
+      console.warn("book-gallery: gallery prefs sync", e);
+      await mergeHiddenStaticFromIdb();
+    }
+  } else {
+    await mergeHiddenStaticFromIdb();
+  }
   lastLibrarySyncError = null;
   let libraryPullOk = false;
   if (window.LibrarySync?.isConfigured?.()) {
@@ -2394,20 +2475,23 @@ document.addEventListener("click", () => {
   closeToolbarMenu();
 });
 
-document.getElementById("restore-hidden-item")?.addEventListener("click", () => {
-  const n = loadHiddenStatic().size;
-  if (n === 0) return;
-  if (
-    !confirm(
-      `Bring back all ${n} removed photo(s)? They will appear in the grid again.`
-    )
-  ) {
-    return;
-  }
-  unhideAllStatic();
-  closeToolbarMenu();
-  refresh().catch(console.error);
-});
+document
+  .getElementById("restore-hidden-item")
+  ?.addEventListener("click", async () => {
+    const n = loadHiddenStatic().size;
+    if (n === 0) return;
+    if (
+      !confirm(
+        `Bring back all ${n} removed photo(s)? They will appear in the grid again.`
+      )
+    ) {
+      return;
+    }
+    unhideAllStatic();
+    closeToolbarMenu();
+    await flushHiddenPrefsToCloud();
+    refresh().catch(console.error);
+  });
 
 function showGalleryInitError(err) {
   console.error("book-gallery: gallery init failed", err);

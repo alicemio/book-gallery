@@ -82,6 +82,31 @@ alter table public.library_uploads
 alter table public.library_uploads
   add column if not exists source_upload_id uuid;
 
+-- Shared “removed from gallery” manifest paths (same count on every device). Single row id=1.
+create table if not exists public.library_gallery_prefs (
+  id smallint primary key default 1
+    constraint gallery_prefs_singleton check (id = 1),
+  hidden_static_paths text[] not null default '{}',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.library_gallery_prefs enable row level security;
+
+create policy "gallery_prefs_select" on public.library_gallery_prefs
+  for select using (true);
+
+create policy "gallery_prefs_insert" on public.library_gallery_prefs
+  for insert with check (id = 1);
+
+create policy "gallery_prefs_update" on public.library_gallery_prefs
+  for update using (id = 1) with check (id = 1);
+
+insert into public.library_gallery_prefs (id, hidden_static_paths)
+values (1, '{}')
+on conflict (id) do nothing;
+
+-- Optional: Database → Replication → Realtime for public.library_gallery_prefs
+
 -- Visitor book requests (multi-select from gallery; review in Supabase Table Editor).
 create table if not exists public.book_inquiries (
   id uuid primary key default gen_random_uuid(),
