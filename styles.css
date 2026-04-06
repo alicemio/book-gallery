@@ -429,6 +429,12 @@ main {
   cursor: pointer;
 }
 
+/* Inquiry “Request” checked — frame the thumbnail (on the img so it isn’t covered). */
+.card:has(.card-inquiry-cb:checked) .card-thumb {
+  outline: 2px solid #166534;
+  outline-offset: -2px;
+}
+
 .card-thumb {
   width: 100%;
   height: 100%;
