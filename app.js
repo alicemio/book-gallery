@@ -500,9 +500,10 @@ function afterKeyFromUploadRowFields(row) {
 
 function buildCanonicalOrderedKeys(idbRows) {
   const sortedStatic = visibleSortedStaticPaths();
-  let list = sortedStatic.map(itemKeyStatic);
-  const withRemote = idbRows.filter((r) => r.remoteId);
-  const localOnly = idbRows.filter((r) => !r.remoteId);
+  const list = sortedStatic.map(itemKeyStatic);
+  const setList = new Set(list);
+  const uploads = idbRows.slice();
+
   function cmpUploads(a, b) {
     const c = idbOrderKey(a).localeCompare(idbOrderKey(b));
     if (c !== 0) return c;
@@ -510,19 +511,89 @@ function buildCanonicalOrderedKeys(idbRows) {
     const br = b.remoteId ? String(b.remoteId) : String(b.id);
     return ar.localeCompare(br);
   }
-  withRemote.sort(cmpUploads);
-  localOnly.sort((a, b) => a.id - b.id);
-  for (const row of [...withRemote, ...localOnly]) {
-    const self = itemKeyForIdbRow(row);
-    list = list.filter((k) => k !== self);
-    const afterKey = afterKeyFromUploadRowFields(row);
-    if (afterKey && list.includes(afterKey)) {
-      const idx = list.indexOf(afterKey);
-      list.splice(idx + 1, 0, self);
-    } else {
-      list.push(self);
+
+  const keyToRow = new Map();
+  for (const r of uploads) keyToRow.set(itemKeyForIdbRow(r), r);
+
+  /** If the source manifest image is hidden here, anchor to the nearest earlier visible static (same manifest order everywhere). */
+  function anchorStaticKeyForSourcePath(sourcePath) {
+    const hidden = loadHiddenStatic();
+    const fullOrder = [...staticImages].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+    const i = fullOrder.indexOf(sourcePath);
+    if (i < 0) return null;
+    for (let j = i; j >= 0; j--) {
+      const p = fullOrder[j];
+      if (hidden.has(p)) continue;
+      const k = itemKeyStatic(p);
+      if (setList.has(k)) return k;
+    }
+    return null;
+  }
+
+  /** Immediate parent key that already exists in `list`, or null. */
+  function parentKeyInList(row) {
+    const sp = row.source_static_path;
+    if (sp != null && String(sp).trim()) {
+      const path = String(sp).trim();
+      const direct = itemKeyStatic(path);
+      if (setList.has(direct)) return direct;
+      return anchorStaticKeyForSourcePath(path);
+    }
+    const su = row.source_upload_id;
+    if (su != null && String(su).trim()) {
+      const k = `u:${String(su).trim()}`;
+      return setList.has(k) ? k : null;
+    }
+    return null;
+  }
+
+  const pending = new Set(uploads);
+
+  function appendStuckUploads() {
+    const rest = [...pending].sort(cmpUploads);
+    for (const r of rest) {
+      const k = itemKeyForIdbRow(r);
+      if (!setList.has(k)) {
+        list.push(k);
+        setList.add(k);
+      }
+      pending.delete(r);
     }
   }
+
+  const maxPasses = Math.max(96, uploads.length * 6);
+  let passes = 0;
+  while (pending.size && passes < maxPasses) {
+    passes += 1;
+    const ready = [...pending].filter((r) => parentKeyInList(r) != null);
+    if (!ready.length) {
+      appendStuckUploads();
+      break;
+    }
+    ready.sort(cmpUploads);
+    const next = ready[0];
+    const pk = parentKeyInList(next);
+    const self = itemKeyForIdbRow(next);
+    if (pk == null || setList.has(self)) {
+      pending.delete(next);
+      continue;
+    }
+    let idx = list.lastIndexOf(pk) + 1;
+    while (idx < list.length) {
+      const peer = keyToRow.get(list[idx]);
+      if (!peer) break;
+      if (parentKeyInList(peer) !== pk) break;
+      if (cmpUploads(peer, next) <= 0) idx++;
+      else break;
+    }
+    list.splice(idx, 0, self);
+    setList.add(self);
+    pending.delete(next);
+  }
+  if (pending.size) appendStuckUploads();
+
   return list;
 }
 
