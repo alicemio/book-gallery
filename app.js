@@ -10,6 +10,8 @@ const LS_HIDDEN_STATIC = "book-gallery-hidden-static";
 const CATEGORY_DATALIST_ID = "gallery-category-datalist";
 /** Order of gallery card keys (`s:…` / `i:…`); includes manual placement, e.g. crops after their source. */
 const LS_ITEM_ORDER = "book-gallery-item-order";
+/** Per static `images/…` path: last local edit or last merged remote `updated_at` (ms), for LWW merge. */
+const LS_STATIC_LWW_MS = "book-gallery-static-lww-ms";
 
 const staticImages = Array.isArray(window.BOOK_GALLERY_STATIC_IMAGES)
   ? window.BOOK_GALLERY_STATIC_IMAGES
@@ -338,6 +340,48 @@ function shouldCloudSyncPath(path) {
   );
 }
 
+function loadStaticLwwMap() {
+  try {
+    const raw = localStorage.getItem(LS_STATIC_LWW_MS);
+    const o = raw ? JSON.parse(raw) : {};
+    return o && typeof o === "object" ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStaticLwwMap(obj) {
+  try {
+    localStorage.setItem(LS_STATIC_LWW_MS, JSON.stringify(obj));
+  } catch (e) {
+    console.warn("book-gallery: static LWW map", e);
+  }
+}
+
+function getStaticLwwMs(path) {
+  const m = loadStaticLwwMap();
+  const v = m[path];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Call when the user edits notes or categories on a manifest photo so pulls don’t overwrite before push. */
+function bumpStaticLocalLww(path) {
+  if (!shouldCloudSyncPath(path)) return;
+  const m = loadStaticLwwMap();
+  const prev = typeof m[path] === "number" ? m[path] : 0;
+  const t = Date.now();
+  m[path] = Math.max(t, prev + 1);
+  saveStaticLwwMap(m);
+}
+
+function recordMergedStaticLww(path, remoteMs) {
+  if (!shouldCloudSyncPath(path) || !Number.isFinite(remoteMs)) return;
+  const m = loadStaticLwwMap();
+  const prev = typeof m[path] === "number" ? m[path] : 0;
+  m[path] = Math.max(prev, remoteMs);
+  saveStaticLwwMap(m);
+}
+
 function queueCloudSyncForStaticPath(path) {
   if (
     typeof window.LibrarySync?.isConfigured !== "function" ||
@@ -364,21 +408,29 @@ function mergeRemoteLibraryRows(rows) {
     if (!path || typeof path !== "string") continue;
     if (!shouldCloudSyncPath(path)) continue;
     const key = itemKeyStatic(path);
+    const remoteMs =
+      row.updated_at != null && row.updated_at !== ""
+        ? new Date(String(row.updated_at)).getTime()
+        : NaN;
+    if (
+      Number.isFinite(remoteMs) &&
+      remoteMs <= getStaticLwwMs(path)
+    ) {
+      continue;
+    }
     const cat = row.category != null ? String(row.category).trim() : "";
     if (cat) m[key] = cat;
     else delete m[key];
-  }
-  saveCategoryMap(m);
-  for (const row of rows) {
-    const path = row.image_path;
-    if (!path || typeof path !== "string") continue;
-    if (!shouldCloudSyncPath(path)) continue;
     setStaticCaption(
       path,
       row.notes != null ? String(row.notes) : "",
       { skipRemote: true }
     );
+    if (Number.isFinite(remoteMs)) {
+      recordMergedStaticLww(path, remoteMs);
+    }
   }
+  saveCategoryMap(m);
 }
 
 function updateSyncHint() {
@@ -482,6 +534,7 @@ function setCategoriesForKey(key, names, opts = {}) {
   saveCategoryMap(m);
   if (!opts.skipRemote) {
     const path = staticPathFromItemKey(key);
+    if (path && shouldCloudSyncPath(path)) bumpStaticLocalLww(path);
     if (path) queueCloudSyncForStaticPath(path);
   }
 }
@@ -542,7 +595,10 @@ function getStaticCaption(path) {
 
 function setStaticCaption(path, value, opts = {}) {
   localStorage.setItem(staticCaptionKey(path), value);
-  if (!opts.skipRemote) queueCloudSyncForStaticPath(path);
+  if (!opts.skipRemote) {
+    if (shouldCloudSyncPath(path)) bumpStaticLocalLww(path);
+    queueCloudSyncForStaticPath(path);
+  }
 }
 
 function parseHiddenStaticFromLocalStorage() {
@@ -2025,6 +2081,15 @@ async function refresh() {
     });
   }
 }
+
+let visibilityRefreshTimer = null;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !window.LibrarySync?.isConfigured?.()) return;
+  clearTimeout(visibilityRefreshTimer);
+  visibilityRefreshTimer = setTimeout(() => {
+    refresh().catch(console.error);
+  }, 600);
+});
 
 function applyBodyScrollLock() {
   document.body.style.overflow = lightbox.hidden ? "" : "hidden";

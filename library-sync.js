@@ -34,7 +34,7 @@ const LibrarySync = (() => {
       if (!sb) return [];
       const { data, error } = await sb
         .from("library_items")
-        .select("image_path,category,notes");
+        .select("image_path,category,notes,updated_at");
       if (error) throw error;
       return data || [];
     },
