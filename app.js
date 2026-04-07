@@ -330,6 +330,8 @@ const inquirySnapshots = new Map();
 /** Debounce timers for Supabase upserts (one per `images/…` path). */
 const syncStaticTimers = Object.create(null);
 let librarySyncSubscribed = false;
+/** Serialize refresh — overlapping runs (Realtime + timers + Remove) corrupted the hidden list. */
+let refreshChain = Promise.resolve();
 let lastLibrarySyncError = null;
 
 function staticPathFromItemKey(key) {
@@ -968,7 +970,6 @@ function applyRemoteHiddenPaths(paths) {
 
 async function pullAndMergeGalleryPrefsFromCloud() {
   const data = await window.LibrarySync.pullGalleryPrefs();
-  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
   if (data == null) {
     await seedHiddenPrefsToCloudIfNoRow();
     return;
@@ -976,6 +977,7 @@ async function pullAndMergeGalleryPrefsFromCloud() {
   const serverPaths = (
     Array.isArray(data.hidden_static_paths) ? data.hidden_static_paths : []
   ).filter(shouldCloudSyncPath);
+  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
   // Empty server + local removals: upload local (bootstrap row was {}).
   if (serverPaths.length === 0 && local.length > 0) {
     await seedHiddenPrefsToCloudIfNoRow();
@@ -2374,7 +2376,14 @@ function renderGallery(idbRows) {
   syncInquiryStickyBar();
 }
 
-async function refresh() {
+function refresh() {
+  refreshChain = refreshChain
+    .then(() => runRefresh())
+    .catch((e) => console.error("book-gallery: refresh", e));
+  return refreshChain;
+}
+
+async function runRefresh() {
   if (window.LibrarySync?.isConfigured?.() && window.LibrarySync.hasClient()) {
     try {
       await pullAndMergeGalleryPrefsFromCloud();
@@ -2412,7 +2421,7 @@ async function refresh() {
       () => {
         clearTimeout(debounceRemote);
         debounceRemote = setTimeout(() => {
-          refresh().catch(console.error);
+          refresh();
         }, 450);
       },
       (status) => {
