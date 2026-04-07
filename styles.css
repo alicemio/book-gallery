@@ -10,6 +10,10 @@
   --radius: 12px;
   --font-display: "Literata", Georgia, serif;
   --font-ui: "Source Sans 3", system-ui, sans-serif;
+  /* Slightly denser layout (~browser 90% zoom) without scaling the whole page */
+  --content-max: 1280px;
+  --gallery-col-min: 198px;
+  --gallery-gap: 1.35rem;
 }
 
 *,
@@ -34,13 +38,13 @@ body {
 }
 
 .site-header {
-  padding: 2.5rem 1.5rem 2rem;
+  padding: 2.25rem 1.35rem 1.65rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
 .header-inner {
-  max-width: 1200px;
+  max-width: var(--content-max);
   margin: 0 auto;
 }
 
@@ -71,9 +75,9 @@ body {
 }
 
 main {
-  max-width: 1200px;
+  max-width: var(--content-max);
   margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
+  padding: 1.75rem 1.35rem 3.5rem;
 }
 
 .toolbar {
@@ -81,8 +85,8 @@ main {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.65rem;
-  margin-bottom: 1.5rem;
-  padding: 0.75rem 0.9rem;
+  margin-bottom: 1.25rem;
+  padding: 0.65rem 0.85rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -398,8 +402,8 @@ main {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(var(--gallery-col-min), 1fr));
+  gap: var(--gallery-gap);
 }
 
 .card {
@@ -439,10 +443,10 @@ main {
 }
 
 .card-body {
-  padding: 0.75rem 0.85rem 0.9rem;
+  padding: 0.65rem 0.75rem 0.8rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.45rem;
 }
 
 .card-meta {
@@ -461,10 +465,10 @@ main {
 
 .card-caption {
   width: 100%;
-  min-height: 4.5rem;
-  padding: 0.5rem 0.6rem;
+  min-height: 4rem;
+  padding: 0.45rem 0.55rem;
   font-family: var(--font-ui);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--ink);
   border: 1px solid var(--border);
@@ -541,7 +545,7 @@ main {
 }
 
 .inquiry-sticky-inner {
-  max-width: 1200px;
+  max-width: var(--content-max);
   margin: 0 auto;
   display: flex;
   flex-wrap: wrap;
@@ -855,7 +859,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  max-width: min(92vw, 1200px);
+  max-width: min(92vw, var(--content-max));
   max-height: min(78vh, calc(100vh - 8rem));
   width: 100%;
   overflow: hidden;
