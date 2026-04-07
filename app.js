@@ -2155,7 +2155,7 @@ function renderStaticCard(path, displayIndex) {
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "remove-btn";
-  remove.textContent = "Remove from gallery";
+  remove.textContent = "Remove";
   remove.addEventListener("click", async () => {
     const fn = fileNameFromPath(path);
     if (
