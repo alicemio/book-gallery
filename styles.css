@@ -766,6 +766,52 @@ main {
   line-height: 1.45;
 }
 
+.restore-one-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(50vh, 320px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.restore-one-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fffcf6;
+}
+
+.restore-one-path {
+  font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.restore-one-btn {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+
+.restore-one-btn:hover {
+  filter: brightness(1.05);
+}
+
 .inquiry-form {
   display: flex;
   flex-direction: column;

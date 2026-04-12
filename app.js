@@ -1297,6 +1297,16 @@ function unhideAllStatic() {
   );
 }
 
+/** Bring back a single removed manifest photo (path like `images/IMG_….jpg`). */
+function unhideStaticPath(path) {
+  if (!path || !shouldCloudSyncPath(path)) return;
+  const s = loadHiddenStatic();
+  if (!s.has(path)) return;
+  s.delete(path);
+  saveHiddenStatic(s);
+  queuePushGalleryPrefsToCloud();
+}
+
 /** Apply server hidden list so “Remove” counts match on phone and desktop. */
 function applyRemoteHiddenPaths(paths) {
   const next = new Set(paths.filter((p) => shouldCloudSyncPath(p)));
@@ -1553,6 +1563,11 @@ function updateToolbarMenuState() {
     clearTaken.disabled = nt === 0;
     clearTaken.textContent =
       nt > 0 ? `Clear taken marks (${nt})` : "No books marked taken";
+  }
+
+  const restoreOne = document.getElementById("restore-one-hidden-item");
+  if (restoreOne) {
+    restoreOne.disabled = n === 0;
   }
 }
 
@@ -2973,11 +2988,63 @@ lightbox.addEventListener("click", (e) => {
   if (e.target === lightbox) closeLightbox();
 });
 
+function openRestoreOneModal() {
+  const modal = document.getElementById("restore-one-modal");
+  const listEl = document.getElementById("restore-one-list");
+  if (!modal || !listEl) return;
+  const paths = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+  paths.sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  listEl.replaceChildren();
+  for (const p of paths) {
+    const row = document.createElement("li");
+    row.className = "restore-one-row";
+    const label = document.createElement("span");
+    label.className = "restore-one-path";
+    label.textContent = fileNameFromPath(p);
+    label.title = p;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "restore-one-btn";
+    btn.textContent = "Restore";
+    btn.addEventListener("click", async () => {
+      unhideStaticPath(p);
+      closeRestoreOneModal();
+      try {
+        await flushGalleryPrefsToCloud();
+        await refresh();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+    row.appendChild(label);
+    row.appendChild(btn);
+    listEl.appendChild(row);
+  }
+  modal.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+
+function closeRestoreOneModal() {
+  const modal = document.getElementById("restore-one-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  const succ = document.getElementById("inquiry-success-modal");
+  const succOpen = succ && !succ.hidden;
+  if (!succOpen) document.body.style.overflow = "";
+}
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     const succ = document.getElementById("inquiry-success-modal");
     if (succ && !succ.hidden) {
       closeInquirySuccessModal();
+      return;
+    }
+    const restoreOne = document.getElementById("restore-one-modal");
+    if (restoreOne && !restoreOne.hidden) {
+      closeRestoreOneModal();
       return;
     }
     const inq = document.getElementById("inquiry-modal");
@@ -3007,6 +3074,13 @@ document.addEventListener("click", () => {
   closeToolbarMenu();
 });
 
+document.getElementById("restore-one-hidden-item")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (loadHiddenStatic().size === 0) return;
+  closeToolbarMenu();
+  openRestoreOneModal();
+});
+
 document
   .getElementById("restore-hidden-item")
   ?.addEventListener("click", async () => {
@@ -3024,6 +3098,9 @@ document
     await flushGalleryPrefsToCloud();
     refresh().catch(console.error);
   });
+
+document.getElementById("restore-one-modal-close")?.addEventListener("click", closeRestoreOneModal);
+document.getElementById("restore-one-modal-backdrop")?.addEventListener("click", closeRestoreOneModal);
 
 document.getElementById("clear-taken-item")?.addEventListener("click", async () => {
   const nt = loadTakenStatic().size + loadTakenUploadIds().size;

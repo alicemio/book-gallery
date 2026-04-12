@@ -80,6 +80,15 @@
             <button
               type="button"
               role="menuitem"
+              id="restore-one-hidden-item"
+              class="toolbar-menu-item"
+              disabled
+            >
+              Restore one photo…
+            </button>
+            <button
+              type="button"
+              role="menuitem"
               id="clear-taken-item"
               class="toolbar-menu-item"
               disabled
@@ -244,6 +253,33 @@
             Send request
           </button>
         </form>
+      </div>
+    </div>
+
+    <div
+      id="restore-one-modal"
+      class="inquiry-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="restore-one-modal-title"
+      hidden
+    >
+      <div class="inquiry-modal-backdrop" id="restore-one-modal-backdrop"></div>
+      <div class="inquiry-modal-panel">
+        <button
+          type="button"
+          class="inquiry-modal-close"
+          id="restore-one-modal-close"
+          aria-label="Close"
+        >
+          &times;
+        </button>
+        <h2 id="restore-one-modal-title" class="inquiry-modal-title">Restore one photo</h2>
+        <p class="inquiry-modal-summary">
+          These files are only hidden from the grid—the image files are still on the server. Pick
+          one to show again.
+        </p>
+        <ul id="restore-one-list" class="restore-one-list"></ul>
       </div>
     </div>
 

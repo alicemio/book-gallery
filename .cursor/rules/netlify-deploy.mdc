@@ -1,0 +1,15 @@
+---
+description: Deploy this site with Netlify CLI from the project folder, not UI-only Git deploys by default.
+alwaysApply: true
+---
+
+# Netlify deploy (book-gallery)
+
+When deploying **this** project to production:
+
+- Run from the repo root: `npx netlify-cli deploy --prod --dir .`
+- Ensure the folder is linked to **`lewiscooklibrary`** (`npx netlify-cli status`).
+
+Do **not** tell the user to rely only on **Netlify UI → Trigger deploy** unless **GitHub `main` already contains** the same changes: UI deploys build from Git, while CLI deploy uploads the **local** tree. If local work is not pushed, UI deploys can drop features.
+
+After meaningful changes, prefer **git push** so Git and CLI stay aligned, then CLI deploy is still fine.
