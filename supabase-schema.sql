@@ -103,6 +103,13 @@ create policy "gallery_prefs_update" on public.library_gallery_prefs
 
 -- Row id=1 is created by the site’s first upsert (avoids empty `{}` wiping local removals).
 
+-- Books still shown in the grid but marked unavailable (taken). Run once on existing projects.
+alter table public.library_gallery_prefs
+  add column if not exists taken_static_paths text[] not null default '{}';
+
+alter table public.library_gallery_prefs
+  add column if not exists taken_upload_ids uuid[] not null default '{}';
+
 -- Optional: Database → Replication → Realtime for public.library_gallery_prefs
 
 -- Visitor book requests (multi-select from gallery; review in Supabase Table Editor).

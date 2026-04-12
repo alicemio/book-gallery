@@ -134,35 +134,73 @@ const LibrarySync = (() => {
       if (stErr) console.error("LibrarySync.deleteUpload storage", stErr);
     },
 
-    /** @returns {Promise<{ hidden_static_paths?: string[], updated_at?: string } | null>} */
+    /**
+     * @returns {Promise<{
+     *   hidden_static_paths?: string[],
+     *   taken_static_paths?: string[],
+     *   taken_upload_ids?: string[],
+     *   updated_at?: string
+     * } | null>}
+     */
     async pullGalleryPrefs() {
       const sb = getClient();
       if (!sb) return null;
       const { data, error } = await sb
         .from("library_gallery_prefs")
-        .select("hidden_static_paths,updated_at")
+        .select("hidden_static_paths,taken_static_paths,taken_upload_ids,updated_at")
         .eq("id", 1)
         .maybeSingle();
       if (error) throw error;
       return data;
     },
 
-    /** @param {string[]} paths manifest paths `images/…` currently hidden */
-    async pushGalleryPrefs(paths) {
+    /**
+     * @param {{
+     *   hidden_static_paths: string[],
+     *   taken_static_paths: string[],
+     *   taken_upload_ids: string[]
+     * }} prefs
+     */
+    async pushGalleryPrefs(prefs) {
       const sb = getClient();
       if (!sb) return { error: new Error("Supabase client unavailable") };
-      const unique = [
+      if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) {
+        return { error: new Error("pushGalleryPrefs expects { hidden_static_paths, taken_static_paths, taken_upload_ids }") };
+      }
+      const hidden = prefs.hidden_static_paths ?? [];
+      const takenStatic = prefs.taken_static_paths ?? [];
+      const takenUpload = prefs.taken_upload_ids ?? [];
+      const uniqueHidden = [
         ...new Set(
-          (paths || [])
+          (hidden || [])
             .filter((p) => typeof p === "string")
             .map((p) => p.trim())
             .filter(Boolean)
         ),
       ];
+      const uniqueTakenS = [
+        ...new Set(
+          (takenStatic || [])
+            .filter((p) => typeof p === "string")
+            .map((p) => p.trim())
+            .filter(Boolean)
+        ),
+      ];
+      const uuidRe =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const uniqueTakenU = [
+        ...new Set(
+          (takenUpload || [])
+            .filter((id) => typeof id === "string" && uuidRe.test(id.trim()))
+            .map((id) => id.trim().toLowerCase())
+        ),
+      ];
       const { error } = await sb.from("library_gallery_prefs").upsert(
         {
           id: 1,
-          hidden_static_paths: unique,
+          hidden_static_paths: uniqueHidden,
+          taken_static_paths: uniqueTakenS,
+          taken_upload_ids: uniqueTakenU,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "id" }

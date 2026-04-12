@@ -426,6 +426,49 @@ main {
   box-shadow: 0 12px 36px rgba(28, 25, 20, 0.12);
 }
 
+.card.card-ref-target {
+  box-shadow: 0 0 0 2px var(--accent), 0 12px 36px rgba(28, 25, 20, 0.12);
+}
+
+.card.card-taken .card-thumb {
+  position: relative;
+  z-index: 0;
+  filter: grayscale(0.45) brightness(0.88);
+}
+
+/* Strong dim overlay on the cover so “taken” reads at a glance */
+.card.card-taken .card-thumb-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(22, 18, 14, 0.58);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.card.card-taken .card-thumb-wrap::after {
+  content: "Taken";
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgba(45, 38, 32, 0.92);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.card.card-taken .card-body {
+  opacity: 0.88;
+}
+
 .card-thumb-wrap {
   position: relative;
   aspect-ratio: 3 / 4;
@@ -485,7 +528,27 @@ main {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.taken-btn {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.taken-btn:hover {
+  color: var(--accent);
 }
 
 .remove-btn {
@@ -507,6 +570,13 @@ main {
 
 .card-inquiry-row {
   margin: 0.35rem 0 0.15rem;
+}
+
+.card-inquiry-taken {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
 }
 
 .card-inquiry-label {

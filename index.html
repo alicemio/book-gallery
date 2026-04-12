@@ -18,9 +18,11 @@
         <h1>Prof. Lewis Cook's Book Catalogue</h1>
         <p class="tagline">
           Label each image by adding a category and adding notes on its card. Click a
-          thumbnail to open it and zoom in. Use <strong>Request</strong> on each card to
-          build a list, then click <strong>Request books</strong> to send your name, email,
-          and which books you are interested in.
+          thumbnail to open it and zoom in. Use <strong>Mark taken</strong> when a book is
+          no longer available (it stays visible but can’t be requested). Use
+          <strong>Request</strong> on each card to build a list, then click
+          <strong>Request books</strong> to send your name, email, and which books you are
+          interested in.
         </p>
         <p id="sync-hint" class="sync-hint" hidden></p>
       </div>
@@ -74,6 +76,15 @@
               disabled
             >
               No removed photos
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              id="clear-taken-item"
+              class="toolbar-menu-item"
+              disabled
+            >
+              No books marked taken
             </button>
           </div>
         </div>

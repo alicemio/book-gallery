@@ -7,6 +7,11 @@ const DB_VERSION = 2;
 const LS_CAPTION_PREFIX = "book-gallery-caption:";
 const LS_CATEGORY_BY_ITEM = "book-gallery-category-by-item";
 const LS_HIDDEN_STATIC = "book-gallery-hidden-static";
+/** Manifest paths marked “taken” — still visible in the grid, synced like hidden prefs. */
+const LS_TAKEN_STATIC = "book-gallery-taken-static";
+const LS_TAKEN_UPLOAD = "book-gallery-taken-upload";
+const TAKEN_STATIC_META_ID = "taken-static-paths";
+const TAKEN_UPLOAD_META_ID = "taken-upload-ids";
 const CATEGORY_DATALIST_ID = "gallery-category-datalist";
 /** Order of gallery card keys (`s:…`, `u:<uuid>` synced uploads, `i:<n>` local-only); localStorage only — cloud uses canonical order. */
 const LS_ITEM_ORDER = "book-gallery-item-order";
@@ -439,6 +444,42 @@ function mergeRemoteLibraryRows(rows) {
   saveCategoryMap(m);
 }
 
+/** Supabase / fetch failures are often plain `{ message, details, hint, code }`, not `Error`. */
+function formatLibrarySyncError(err) {
+  if (err == null) return "Unknown error";
+  if (err instanceof Error) {
+    const base = err.message || "Error";
+    if (err.cause instanceof Error && err.cause.message) {
+      return `${base} (${err.cause.message})`;
+    }
+    return base;
+  }
+  if (typeof err === "string") return err;
+  if (typeof err === "object") {
+    const msg = err.message;
+    if (typeof msg === "string" && msg.trim()) {
+      const parts = [msg.trim()];
+      if (typeof err.details === "string" && err.details.trim()) {
+        parts.push(err.details.trim());
+      }
+      if (typeof err.hint === "string" && err.hint.trim()) {
+        parts.push(err.hint.trim());
+      }
+      if (typeof err.code === "string" && err.code.trim()) {
+        parts.push(`(${err.code})`);
+      }
+      return parts.join(" — ");
+    }
+    try {
+      const s = JSON.stringify(err);
+      if (s && s !== "{}") return s.slice(0, 280);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return typeof err === "object" ? "Request failed (see browser console)" : String(err);
+}
+
 function updateSyncHint() {
   const el = document.getElementById("sync-hint");
   if (!el) return;
@@ -462,10 +503,7 @@ function updateSyncHint() {
   }
   el.hidden = false;
   if (lastLibrarySyncError) {
-    const msg =
-      lastLibrarySyncError instanceof Error
-        ? lastLibrarySyncError.message
-        : String(lastLibrarySyncError);
+    const msg = formatLibrarySyncError(lastLibrarySyncError);
     el.textContent = `Could not load the shared library. ${msg.slice(0, 200)}${
       msg.length > 200 ? "…" : ""
     } Try Wi‑Fi, disable content blockers for this site, hard refresh, then check Supabase + SQL.`;
@@ -479,24 +517,46 @@ function updateSyncHint() {
 
 /** Retries help flaky mobile / captive-portal networks. */
 async function pullLibraryFromCloud() {
-  let lastErr = null;
+  let lastItemsErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const remoteRows = await window.LibrarySync.pull();
       mergeRemoteLibraryRows(remoteRows);
-      const uploadRows = await window.LibrarySync.pullUploads();
-      await mergeRemoteUploadRows(uploadRows);
-      return true;
+      lastItemsErr = null;
+      break;
     } catch (e) {
-      lastErr = e;
-      console.warn("book-gallery: cloud pull attempt failed", attempt, e);
+      lastItemsErr = e;
+      console.warn("book-gallery: library_items pull failed", attempt, e);
       if (attempt < 3) {
         await new Promise((r) => setTimeout(r, 450 * attempt));
       }
     }
   }
-  if (lastErr) lastLibrarySyncError = lastErr;
-  return false;
+  if (lastItemsErr) {
+    lastLibrarySyncError = lastItemsErr;
+    return false;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const uploadRows = await window.LibrarySync.pullUploads();
+      await mergeRemoteUploadRows(uploadRows);
+      break;
+    } catch (e) {
+      console.warn("book-gallery: library_uploads pull failed", attempt, e);
+      if (attempt === 3) {
+        console.warn(
+          "book-gallery: upload sync skipped; manifest photos and notes still work",
+          formatLibrarySyncError(e)
+        );
+      }
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 450 * attempt));
+      }
+    }
+  }
+
+  return true;
 }
 
 function itemKeyStatic(path) {
@@ -844,6 +904,31 @@ function parseHiddenStaticFromLocalStorage() {
 /** Live Set; same reference returned from `loadHiddenStatic()` so callers can mutate then save. */
 let hiddenStaticMerged = parseHiddenStaticFromLocalStorage();
 
+function parseTakenStaticFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(LS_TAKEN_STATIC);
+    const a = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(a) ? a : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function parseTakenUploadFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(LS_TAKEN_UPLOAD);
+    const a = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(a) ? a.map((x) => String(x).trim().toLowerCase()).filter(Boolean) : []
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+let takenStaticMerged = parseTakenStaticFromLocalStorage();
+let takenUploadMerged = parseTakenUploadFromLocalStorage();
+
 function loadHiddenStatic() {
   return hiddenStaticMerged;
 }
@@ -928,20 +1013,280 @@ async function mergeHiddenStaticFromIdb() {
   }
 }
 
+function loadTakenStatic() {
+  return takenStaticMerged;
+}
+
+function saveTakenStatic(set) {
+  takenStaticMerged = set instanceof Set ? set : new Set(set);
+  try {
+    localStorage.setItem(
+      LS_TAKEN_STATIC,
+      JSON.stringify([...takenStaticMerged])
+    );
+  } catch (e) {
+    console.warn("book-gallery: save taken static", e);
+  }
+  mirrorTakenStaticToIdb(takenStaticMerged).catch((e) =>
+    console.warn("book-gallery: mirror taken static to IndexedDB", e)
+  );
+}
+
+function loadTakenUploadIds() {
+  return takenUploadMerged;
+}
+
+function saveTakenUploadIds(set) {
+  takenUploadMerged = set instanceof Set ? set : new Set(set);
+  try {
+    localStorage.setItem(
+      LS_TAKEN_UPLOAD,
+      JSON.stringify([...takenUploadMerged])
+    );
+  } catch (e) {
+    console.warn("book-gallery: save taken uploads", e);
+  }
+  mirrorTakenUploadToIdb(takenUploadMerged).catch((e) =>
+    console.warn("book-gallery: mirror taken uploads to IndexedDB", e)
+  );
+}
+
+async function mirrorTakenStaticToIdb(set) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readwrite");
+    tx.objectStore(META_STORE).put({
+      id: TAKEN_STATIC_META_ID,
+      paths: [...set],
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("aborted"));
+  });
+}
+
+async function mirrorTakenUploadToIdb(set) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readwrite");
+    tx.objectStore(META_STORE).put({
+      id: TAKEN_UPLOAD_META_ID,
+      ids: [...set],
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("aborted"));
+  });
+}
+
+async function readTakenStaticFromIdb() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readonly");
+    const req = tx.objectStore(META_STORE).get(TAKEN_STATIC_META_ID);
+    req.onsuccess = () => {
+      const row = req.result;
+      if (!row || !Array.isArray(row.paths)) resolve(new Set());
+      else
+        resolve(
+          new Set(row.paths.filter((p) => typeof p === "string" && p.trim()))
+        );
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function readTakenUploadFromIdb() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readonly");
+    const req = tx.objectStore(META_STORE).get(TAKEN_UPLOAD_META_ID);
+    req.onsuccess = () => {
+      const row = req.result;
+      if (!row || !Array.isArray(row.ids)) resolve(new Set());
+      else
+        resolve(
+          new Set(
+            row.ids
+              .map((x) => String(x).trim().toLowerCase())
+              .filter(Boolean)
+          )
+        );
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function mergeTakenPrefsFromIdb() {
+  let staticFromIdb;
+  let uploadFromIdb;
+  try {
+    staticFromIdb = await readTakenStaticFromIdb();
+  } catch (e) {
+    console.warn("book-gallery: read taken static mirror", e);
+    staticFromIdb = new Set();
+  }
+  try {
+    uploadFromIdb = await readTakenUploadFromIdb();
+  } catch (e) {
+    console.warn("book-gallery: read taken upload mirror", e);
+    uploadFromIdb = new Set();
+  }
+  let staticChanged = false;
+  for (const p of staticFromIdb) {
+    if (!takenStaticMerged.has(p)) {
+      takenStaticMerged.add(p);
+      staticChanged = true;
+    }
+  }
+  let uploadChanged = false;
+  for (const id of uploadFromIdb) {
+    if (!takenUploadMerged.has(id)) {
+      takenUploadMerged.add(id);
+      uploadChanged = true;
+    }
+  }
+  if (staticChanged) {
+    try {
+      localStorage.setItem(
+        LS_TAKEN_STATIC,
+        JSON.stringify([...takenStaticMerged])
+      );
+    } catch (e) {
+      console.warn("book-gallery: heal taken static localStorage", e);
+    }
+  }
+  if (uploadChanged) {
+    try {
+      localStorage.setItem(
+        LS_TAKEN_UPLOAD,
+        JSON.stringify([...takenUploadMerged])
+      );
+    } catch (e) {
+      console.warn("book-gallery: heal taken upload localStorage", e);
+    }
+  }
+}
+
 function isStaticHidden(path) {
   return loadHiddenStatic().has(path);
+}
+
+function isStaticTaken(path) {
+  return loadTakenStatic().has(path);
+}
+
+function isUploadTaken(remoteId) {
+  if (!remoteId) return false;
+  return loadTakenUploadIds().has(String(remoteId).trim().toLowerCase());
+}
+
+function normalizeTakenUploadIdsFromServer(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const x of raw) {
+    const s = String(x).trim().toLowerCase();
+    if (s) out.push(s);
+  }
+  return [...new Set(out)];
+}
+
+function markStaticTaken(path) {
+  if (!shouldCloudSyncPath(path)) return;
+  const s = loadTakenStatic();
+  s.add(path);
+  saveTakenStatic(s);
+  queuePushGalleryPrefsToCloud();
+}
+
+function unmarkStaticTaken(path) {
+  const s = loadTakenStatic();
+  s.delete(path);
+  saveTakenStatic(s);
+  queuePushGalleryPrefsToCloud();
+}
+
+function markUploadTaken(remoteId) {
+  const id = String(remoteId).trim().toLowerCase();
+  if (!id) return;
+  const s = loadTakenUploadIds();
+  s.add(id);
+  saveTakenUploadIds(s);
+  queuePushGalleryPrefsToCloud();
+}
+
+function unmarkUploadTaken(remoteId) {
+  const id = String(remoteId).trim().toLowerCase();
+  if (!id) return;
+  const s = loadTakenUploadIds();
+  s.delete(id);
+  saveTakenUploadIds(s);
+  queuePushGalleryPrefsToCloud();
+}
+
+function clearAllTakenMarks() {
+  takenStaticMerged = new Set();
+  takenUploadMerged = new Set();
+  localStorage.removeItem(LS_TAKEN_STATIC);
+  localStorage.removeItem(LS_TAKEN_UPLOAD);
+  mirrorTakenStaticToIdb(takenStaticMerged).catch((e) =>
+    console.warn("book-gallery: clear taken static mirror", e)
+  );
+  mirrorTakenUploadToIdb(takenUploadMerged).catch((e) =>
+    console.warn("book-gallery: clear taken upload mirror", e)
+  );
+}
+
+/** Apply server “taken” lists after pull (union handled in pullAndMerge). */
+function applyRemoteTakenStaticPaths(paths) {
+  const next = new Set(paths.filter((p) => shouldCloudSyncPath(p)));
+  takenStaticMerged = next;
+  try {
+    localStorage.setItem(LS_TAKEN_STATIC, JSON.stringify([...takenStaticMerged]));
+  } catch (e) {
+    console.warn("book-gallery: apply remote taken static", e);
+  }
+  mirrorTakenStaticToIdb(takenStaticMerged).catch((e) =>
+    console.warn("book-gallery: mirror remote taken static", e)
+  );
+}
+
+function applyRemoteTakenUploadIds(ids) {
+  const next = new Set(normalizeTakenUploadIdsFromServer(ids));
+  takenUploadMerged = next;
+  try {
+    localStorage.setItem(LS_TAKEN_UPLOAD, JSON.stringify([...takenUploadMerged]));
+  } catch (e) {
+    console.warn("book-gallery: apply remote taken uploads", e);
+  }
+  mirrorTakenUploadToIdb(takenUploadMerged).catch((e) =>
+    console.warn("book-gallery: mirror remote taken uploads", e)
+  );
+}
+
+function getGalleryPrefsPayload() {
+  return {
+    hidden_static_paths: [...loadHiddenStatic()].filter(shouldCloudSyncPath),
+    taken_static_paths: [...loadTakenStatic()].filter(shouldCloudSyncPath),
+    taken_upload_ids: [...loadTakenUploadIds()],
+  };
 }
 
 function hideStaticPath(path) {
   const s = loadHiddenStatic();
   s.add(path);
   saveHiddenStatic(s);
+  const takenS = loadTakenStatic();
+  if (takenS.has(path)) {
+    takenS.delete(path);
+    saveTakenStatic(takenS);
+  }
   const key = itemKeyStatic(path);
   const m = loadCategoryMap();
   delete m[key];
   saveCategoryMap(m);
   localStorage.removeItem(staticCaptionKey(path));
-  queuePushHiddenPrefsToCloud();
+  queuePushGalleryPrefsToCloud();
 }
 
 function unhideAllStatic() {
@@ -971,43 +1316,78 @@ function applyRemoteHiddenPaths(paths) {
 async function pullAndMergeGalleryPrefsFromCloud() {
   const data = await window.LibrarySync.pullGalleryPrefs();
   if (data == null) {
-    await seedHiddenPrefsToCloudIfNoRow();
+    await seedGalleryPrefsToCloudIfNoRow();
     return;
   }
   const serverPaths = (
     Array.isArray(data.hidden_static_paths) ? data.hidden_static_paths : []
   ).filter(shouldCloudSyncPath);
-  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
-  // Empty server + local removals: upload local (bootstrap row was {}).
-  if (serverPaths.length === 0 && local.length > 0) {
-    await seedHiddenPrefsToCloudIfNoRow();
+  const serverTakenS = (
+    Array.isArray(data.taken_static_paths) ? data.taken_static_paths : []
+  ).filter(shouldCloudSyncPath);
+  const serverTakenU = normalizeTakenUploadIdsFromServer(
+    data.taken_upload_ids
+  );
+
+  const localHidden = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
+  const localTakenS = [...loadTakenStatic()].filter(shouldCloudSyncPath);
+  const localTakenU = [...loadTakenUploadIds()];
+
+  const serverEmpty =
+    serverPaths.length === 0 &&
+    serverTakenS.length === 0 &&
+    serverTakenU.length === 0;
+  const localAny =
+    localHidden.length > 0 || localTakenS.length > 0 || localTakenU.length > 0;
+  if (serverEmpty && localAny) {
+    await seedGalleryPrefsToCloudIfNoRow();
     return;
   }
-  // Union: refresh runs right after Remove before debounced push; without this, pull
-  // would overwrite the row you just hid with a stale server list and the card pops back.
-  const merged = [...new Set([...serverPaths, ...local])];
-  applyRemoteHiddenPaths(merged);
-  const a = [...serverPaths].sort().join("\0");
-  const b = [...merged].sort().join("\0");
-  if (a !== b) {
-    const r = await window.LibrarySync.pushGalleryPrefs(merged);
+
+  const mergedHidden = [...new Set([...serverPaths, ...localHidden])];
+  applyRemoteHiddenPaths(mergedHidden);
+
+  const mergedTakenS = [...new Set([...serverTakenS, ...localTakenS])];
+  applyRemoteTakenStaticPaths(mergedTakenS);
+
+  const mergedTakenU = [...new Set([...serverTakenU, ...localTakenU])];
+  applyRemoteTakenUploadIds(mergedTakenU);
+
+  const norm = (arr) => [...arr].sort().join("\0");
+  const needsPush =
+    norm(serverPaths) !== norm(mergedHidden) ||
+    norm(serverTakenS) !== norm(mergedTakenS) ||
+    norm(serverTakenU) !== norm(mergedTakenU);
+
+  if (needsPush) {
+    const r = await window.LibrarySync.pushGalleryPrefs({
+      hidden_static_paths: mergedHidden,
+      taken_static_paths: mergedTakenS,
+      taken_upload_ids: mergedTakenU,
+    });
     if (r?.error) {
       console.warn("book-gallery: push merged gallery prefs", r.error);
     }
   }
 }
 
-/** First device after migration: upload local hidden list so others can pull it. */
-async function seedHiddenPrefsToCloudIfNoRow() {
-  const local = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
-  if (local.length === 0) return;
-  const r = await window.LibrarySync.pushGalleryPrefs(local);
+/** Bootstrap: server row missing or all-empty while this device has prefs. */
+async function seedGalleryPrefsToCloudIfNoRow() {
+  const p = getGalleryPrefsPayload();
+  if (
+    p.hidden_static_paths.length === 0 &&
+    p.taken_static_paths.length === 0 &&
+    p.taken_upload_ids.length === 0
+  ) {
+    return;
+  }
+  const r = await window.LibrarySync.pushGalleryPrefs(p);
   if (r?.error) throw r.error;
 }
 
-let hiddenPrefsSyncTimer = null;
+let galleryPrefsSyncTimer = null;
 
-function queuePushHiddenPrefsToCloud() {
+function queuePushGalleryPrefsToCloud() {
   if (
     !window.LibrarySync?.pushGalleryPrefs ||
     !window.LibrarySync.isConfigured() ||
@@ -1015,17 +1395,17 @@ function queuePushHiddenPrefsToCloud() {
   ) {
     return;
   }
-  clearTimeout(hiddenPrefsSyncTimer);
-  hiddenPrefsSyncTimer = setTimeout(() => {
-    hiddenPrefsSyncTimer = null;
-    const paths = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
-    window.LibrarySync.pushGalleryPrefs(paths).catch((e) =>
+  clearTimeout(galleryPrefsSyncTimer);
+  galleryPrefsSyncTimer = setTimeout(() => {
+    galleryPrefsSyncTimer = null;
+    const payload = getGalleryPrefsPayload();
+    window.LibrarySync.pushGalleryPrefs(payload).catch((e) =>
       console.warn("book-gallery: push gallery prefs", e)
     );
   }, 550);
 }
 
-async function flushHiddenPrefsToCloud() {
+async function flushGalleryPrefsToCloud() {
   if (
     !window.LibrarySync?.pushGalleryPrefs ||
     !window.LibrarySync.isConfigured() ||
@@ -1033,10 +1413,10 @@ async function flushHiddenPrefsToCloud() {
   ) {
     return;
   }
-  clearTimeout(hiddenPrefsSyncTimer);
-  hiddenPrefsSyncTimer = null;
-  const paths = [...loadHiddenStatic()].filter(shouldCloudSyncPath);
-  const r = await window.LibrarySync.pushGalleryPrefs(paths);
+  clearTimeout(galleryPrefsSyncTimer);
+  galleryPrefsSyncTimer = null;
+  const payload = getGalleryPrefsPayload();
+  const r = await window.LibrarySync.pushGalleryPrefs(payload);
   if (r?.error) console.warn("book-gallery: flush gallery prefs", r.error);
 }
 
@@ -1119,6 +1499,24 @@ function fileNameFromPath(path) {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
+function parseRefFromHash() {
+  if (typeof location === "undefined") return null;
+  const m = location.hash.match(/^#ref-(\d+)$/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function focusRefFromHash() {
+  const ref = parseRefFromHash();
+  if (!ref) return;
+  const card = document.getElementById(`ref-${ref}`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  card.classList.add("card-ref-target");
+  setTimeout(() => card.classList.remove("card-ref-target"), 1200);
+}
+
 function closeToolbarMenu() {
   const menu = document.getElementById("toolbar-menu");
   const btn = document.getElementById("toolbar-menu-btn");
@@ -1141,11 +1539,21 @@ function toggleToolbarMenu() {
 
 function updateToolbarMenuState() {
   const item = document.getElementById("restore-hidden-item");
-  if (!item) return;
-  const n = loadHiddenStatic().size;
-  item.disabled = n === 0;
-  item.textContent =
-    n > 0 ? `Restore removed photos (${n})` : "No removed photos";
+  if (item) {
+    const n = loadHiddenStatic().size;
+    item.disabled = n === 0;
+    item.textContent =
+      n > 0 ? `Restore removed photos (${n})` : "No removed photos";
+  }
+
+  const clearTaken = document.getElementById("clear-taken-item");
+  if (clearTaken) {
+    const nt =
+      loadTakenStatic().size + loadTakenUploadIds().size;
+    clearTaken.disabled = nt === 0;
+    clearTaken.textContent =
+      nt > 0 ? `Clear taken marks (${nt})` : "No books marked taken";
+  }
 }
 
 function openDb() {
@@ -1621,7 +2029,18 @@ function getBlobUrl(id, blob) {
   return url;
 }
 
-function buildInquirySelectRow(itemKey, displayIndex, kind, labelText, extra) {
+function buildInquirySelectRow(itemKey, displayIndex, kind, labelText, extra, opts) {
+  if (opts?.taken) {
+    if (inquirySelectedKeys.has(itemKey)) {
+      inquirySelectedKeys.delete(itemKey);
+      inquirySnapshots.delete(itemKey);
+      syncInquiryStickyBar();
+    }
+    const row = document.createElement("div");
+    row.className = "card-inquiry-row card-inquiry-taken";
+    row.textContent = "Taken — not available to request";
+    return row;
+  }
   const row = document.createElement("div");
   row.className = "card-inquiry-row";
   const cb = document.createElement("input");
@@ -2079,8 +2498,11 @@ function renderFilterChips(items) {
 
 function renderStaticCard(path, displayIndex) {
   const key = itemKeyStatic(path);
+  const taken = isStaticTaken(path);
   const li = document.createElement("li");
-  li.className = "card";
+  li.className = "card" + (taken ? " card-taken" : "");
+  li.id = `ref-${displayIndex}`;
+  li.dataset.displayIndex = String(displayIndex);
   li.dataset.itemKey = key;
   li.dataset.staticPath = path;
 
@@ -2117,10 +2539,17 @@ function renderStaticCard(path, displayIndex) {
 
   if (window.LibrarySync?.isConfigured?.()) {
     body.appendChild(
-      buildInquirySelectRow(key, displayIndex, "static", cap.trim() || `Book #${displayIndex}`, {
-        image_path: path,
-        upload_id: null,
-      })
+      buildInquirySelectRow(
+        key,
+        displayIndex,
+        "static",
+        cap.trim() || `Book #${displayIndex}`,
+        {
+          image_path: path,
+          upload_id: null,
+        },
+        { taken }
+      )
     );
   }
 
@@ -2152,6 +2581,34 @@ function renderStaticCard(path, displayIndex) {
 
   const actions = document.createElement("div");
   actions.className = "card-actions";
+  if (window.LibrarySync?.isConfigured?.() && shouldCloudSyncPath(path)) {
+    const takenBtn = document.createElement("button");
+    takenBtn.type = "button";
+    takenBtn.className = "taken-btn";
+    takenBtn.textContent = taken ? "Available" : "Mark taken";
+    takenBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (taken) {
+        unmarkStaticTaken(path);
+      } else if (
+        confirm(
+          "Mark this book as taken? It stays in the catalogue but visitors can’t request it."
+        )
+      ) {
+        markStaticTaken(path);
+      } else {
+        return;
+      }
+      try {
+        await flushGalleryPrefsToCloud();
+        await refresh();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+    actions.appendChild(takenBtn);
+  }
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "remove-btn";
@@ -2167,7 +2624,7 @@ function renderStaticCard(path, displayIndex) {
     }
     hideStaticPath(path);
     try {
-      await flushHiddenPrefsToCloud();
+      await flushGalleryPrefsToCloud();
       await refresh();
     } catch (e) {
       console.error(e);
@@ -2185,8 +2642,12 @@ function renderStaticCard(path, displayIndex) {
 
 function renderIdbCard(row, displayIndex) {
   const key = itemKeyForIdbRow(row);
+  const uploadTaken =
+    !!row.remoteId && isUploadTaken(row.remoteId);
   const li = document.createElement("li");
-  li.className = "card";
+  li.className = "card" + (uploadTaken ? " card-taken" : "");
+  li.id = `ref-${displayIndex}`;
+  li.dataset.displayIndex = String(displayIndex);
   li.dataset.itemKey = key;
   li.dataset.id = String(row.id);
 
@@ -2224,7 +2685,8 @@ function renderIdbCard(row, displayIndex) {
         {
           image_path: null,
           upload_id: row.remoteId ? String(row.remoteId) : null,
-        }
+        },
+        { taken: uploadTaken }
       )
     );
   }
@@ -2259,6 +2721,34 @@ function renderIdbCard(row, displayIndex) {
 
   const actions = document.createElement("div");
   actions.className = "card-actions";
+  if (window.LibrarySync?.isConfigured?.() && row.remoteId) {
+    const takenBtn = document.createElement("button");
+    takenBtn.type = "button";
+    takenBtn.className = "taken-btn";
+    takenBtn.textContent = uploadTaken ? "Available" : "Mark taken";
+    takenBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (uploadTaken) {
+        unmarkUploadTaken(row.remoteId);
+      } else if (
+        confirm(
+          "Mark this photo as taken? It stays in the catalogue but visitors can’t request it."
+        )
+      ) {
+        markUploadTaken(row.remoteId);
+      } else {
+        return;
+      }
+      try {
+        await flushGalleryPrefsToCloud();
+        await refresh();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+    actions.appendChild(takenBtn);
+  }
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "remove-btn";
@@ -2267,6 +2757,10 @@ function renderIdbCard(row, displayIndex) {
     if (!confirm("Remove this photo from the gallery?")) return;
     try {
       const remoteId = row.remoteId;
+      if (remoteId) {
+        unmarkUploadTaken(remoteId);
+        await flushGalleryPrefsToCloud();
+      }
       const storagePath =
         typeof row.storage_path === "string" && row.storage_path
           ? row.storage_path
@@ -2371,6 +2865,7 @@ function renderGallery(idbRows) {
   }
 
   applyFilterVisibility();
+  focusRefFromHash();
   emptyState.classList.toggle("hidden", total > 0 || !noFiles || allHidden);
   updateToolbarMenuState();
   syncInquiryStickyBar();
@@ -2390,9 +2885,11 @@ async function runRefresh() {
     } catch (e) {
       console.warn("book-gallery: gallery prefs sync", e);
       await mergeHiddenStaticFromIdb();
+      await mergeTakenPrefsFromIdb();
     }
   } else {
     await mergeHiddenStaticFromIdb();
+    await mergeTakenPrefsFromIdb();
   }
   lastLibrarySyncError = null;
   let libraryPullOk = false;
@@ -2493,6 +2990,10 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+window.addEventListener("hashchange", () => {
+  focusRefFromHash();
+});
+
 document.getElementById("toolbar-menu-btn")?.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleToolbarMenu();
@@ -2520,9 +3021,25 @@ document
     }
     unhideAllStatic();
     closeToolbarMenu();
-    await flushHiddenPrefsToCloud();
+    await flushGalleryPrefsToCloud();
     refresh().catch(console.error);
   });
+
+document.getElementById("clear-taken-item")?.addEventListener("click", async () => {
+  const nt = loadTakenStatic().size + loadTakenUploadIds().size;
+  if (nt === 0) return;
+  if (
+    !confirm(
+      `Clear taken marks on all ${nt} book(s)? They will show as available to request again.`
+    )
+  ) {
+    return;
+  }
+  clearAllTakenMarks();
+  closeToolbarMenu();
+  await flushGalleryPrefsToCloud();
+  refresh().catch(console.error);
+});
 
 function showGalleryInitError(err) {
   console.error("book-gallery: gallery init failed", err);
